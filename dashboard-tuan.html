@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.05.14.15" />
+<meta name="version" content="v2026.06.07.01" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-05-14 empty-pnl -->
+<!-- BUILD: 2026-06-07 weekly-52w -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -465,7 +465,7 @@
             <div class="date-input-wrap">
               <input type="date" id="rangeEnd" title="Click để chọn ngày kết thúc" />
             </div>
-            <button class="range-clear" id="rangeClear" title="Khôi phục mặc định (12 tháng / 10 tuần)">
+            <button class="range-clear" id="rangeClear" title="Khôi phục mặc định (24 tháng / 52 tuần)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
             </button>
           </div>
@@ -615,11 +615,11 @@ function toISODate(d){ const x = new Date(d); const o = x.getTimezoneOffset(); r
 function startOfWeek(d){ const x = new Date(d); const day = (x.getDay()+6)%7; x.setDate(x.getDate()-day); x.setHours(0,0,0,0); return x; }
 function endOfWeek(d){ const x = startOfWeek(d); x.setDate(x.getDate()+6); return x; }
 function defaultDateRange(mode){
-  // Default ranges per mode: weekly = last 10 weeks, monthly = last 24 months
+  // Default ranges per mode: weekly = last 52 weeks (~1 year), monthly = last 24 months (~2 years)
   const today = new Date();
   if (mode === 'weekly') {
     const start = startOfWeek(today);
-    start.setDate(start.getDate() - 9 * 7);  // current week + 9 prior = 10 weeks total
+    start.setDate(start.getDate() - 51 * 7);  // current week + 51 prior = 52 weeks total
     return { start: toISODate(start), end: toISODate(endOfWeek(today)) };
   }
   // Monthly (default)
