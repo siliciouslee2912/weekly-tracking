@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.07.02" />
+<meta name="version" content="v2026.06.07.03" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-07 hash-no-daterange -->
+<!-- BUILD: 2026-06-07 remove-6w-slice -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -1585,11 +1585,8 @@ function renderSpecialMetricChart(ctx, periods, labels, makeGrad){
 }
 
 function renderMainChart(){
-  let periods = aggregateByPeriod(activeBranch, activeMode);
-  // Limit to the last 6 weeks for the "Doanh thu theo tuần" (overview) and "Khách hàng theo tuần" (customers) charts
-  if (activeMode === 'weekly' && (activeView === 'overview' || activeView === 'customers')) {
-    periods = periods.slice(-6);
-  }
+  const periods = aggregateByPeriod(activeBranch, activeMode);
+  // No artificial limit — chart uses full dateRange (52 weeks default / 24 months default)
   const labels = periods.map(p => p.label);
   const ctx = $('#mainChart').getContext('2d');
   if (mainChart) mainChart.destroy();
@@ -1845,12 +1842,8 @@ function _renderSourceChart_legacy_unused(){
 function renderCustomerChart(){
   // Canvas removed from layout — bail out silently
   if (!document.getElementById('customerChart')) return;
-  let periods = aggregateByPeriod(activeBranch, activeMode);
-  // Limit to the last 6 weeks for "Khách hàng theo tuần" and "Leads theo nguồn (tuần)" charts
-  // (skip the chart-specific views: courses → "DT khoá học", students → "Số khoá theo loại", conversion → "Leads vs Khách")
-  if (activeMode === 'weekly' && activeView !== 'courses' && activeView !== 'students' && activeView !== 'conversion') {
-    periods = periods.slice(-6);
-  }
+  const periods = aggregateByPeriod(activeBranch, activeMode);
+  // No artificial limit — chart uses full dateRange (52 weeks default / 24 months default)
   const labels = periods.map(p => p.label);
   const ctx = $('#customerChart').getContext('2d');
   if (customerChart) customerChart.destroy();
