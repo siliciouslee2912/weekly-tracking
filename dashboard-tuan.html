@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.07" />
+<meta name="version" content="v2026.06.22.08" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 branch-metrics -->
+<!-- BUILD: 2026-06-22 branch-metrics-per-period -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -2217,54 +2217,72 @@ function renderTable(){
 function renderBranchMetrics() {
   const section = document.getElementById('branchMetricsCard');
   if (!section) return;
-  section.style.display = '';  // show in both monthly and weekly modes
+  section.style.display = '';
 
-  // Only show on overview and customers views (not courses/leads/students/conversion)
+  // Only show on overview and customers views
   if (activeView !== 'overview' && activeView !== 'customers') {
     section.style.display = 'none';
     return;
   }
 
-  const area = document.getElementById('branchMetricsArea');
+  // Clear subtitle — user removed it per request
   const subtitle = document.getElementById('branchMetricsSubtitle');
+  if (subtitle) subtitle.textContent = '';
 
-  // Spa branches only (SCA Academy has different model)
+  const area = document.getElementById('branchMetricsArea');
   const spaBranches = BRANCHES.filter(b => b.type === 'spa');
+  const isMonthly = activeMode === 'monthly';
 
-  // Aggregate per branch from daily entries within active date range
-  const stats = {};
-  spaBranches.forEach(b => { stats[b.id] = { branchId: b.id, name: b.name, color: b.color,
-                                              customers: 0, orders: 0, net: 0 }; });
-  let totalCust = 0, totalOrders = 0, totalNet = 0;
+  // Period key extractor for an entry
+  function periodKeyOf(e) {
+    const dateStr = e.date || e.weekStart;
+    if (!dateStr) return null;
+    if (isMonthly) return dateStr.substring(0, 7);  // 'YYYY-MM'
+    return toISODate(startOfWeek(new Date(dateStr)));  // Monday of week
+  }
+  function periodLabel(key) {
+    if (isMonthly) {
+      const [y, m] = key.split('-');
+      return `T${parseInt(m,10)}/${y.slice(2)}`;
+    }
+    // Weekly: show as DD/MM - DD/MM (Mon-Sun)
+    const start = new Date(key);
+    const end = new Date(start); end.setDate(end.getDate() + 6);
+    const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
+    return `${fmt(start)} - ${fmt(end)}`;
+  }
+
+  // Aggregate per (branchId, periodKey)
+  const allPeriods = new Set();
+  const byBranchPeriod = {};  // branchId → Map(periodKey → {customers, orders, net})
+
+  spaBranches.forEach(b => { byBranchPeriod[b.id] = new Map(); });
 
   for (const b of spaBranches) {
     const entries = getEntries(b.id);  // already dateRange-filtered
     for (const e of entries) {
-      // Customers: newCustTotal + returning (per daily entry, these are distinct counts for that day)
-      const custForEntry = (e.newCustTotal || 0) + (e.returning || 0);
-      stats[b.id].customers += custForEntry;
-      stats[b.id].orders    += (e.orders || 0);
-      // Net = revenue (gross) minus promotions (CTKM + voucher)
+      const pk = periodKeyOf(e);
+      if (!pk) continue;
+      allPeriods.add(pk);
+      if (!byBranchPeriod[b.id].has(pk)) {
+        byBranchPeriod[b.id].set(pk, { customers: 0, orders: 0, net: 0 });
+      }
+      const slot = byBranchPeriod[b.id].get(pk);
+      slot.customers += (e.newCustTotal || 0) + (e.returning || 0);
+      slot.orders    += (e.orders || 0);
       const gross   = (e.revenue?.service || 0) + (e.revenue?.product || 0);
       const promo   = (e.promotions?.service || 0) + (e.promotions?.product || 0);
       const voucher = (e.promoVoucher?.service || 0) + (e.promoVoucher?.product || 0);
-      stats[b.id].net += (gross - promo - voucher);
+      slot.net += (gross - promo - voucher);
     }
-    totalCust   += stats[b.id].customers;
-    totalOrders += stats[b.id].orders;
-    totalNet    += stats[b.id].net;
   }
 
-  // Subtitle reflects date range
-  if (dateRange.start && dateRange.end) {
-    const fmt = (s) => { const [y,m,d] = s.split('-'); return `${d}/${m}/${y.slice(2)}`; };
-    subtitle.textContent = `Số liệu tổng hợp · ${fmt(dateRange.start)} → ${fmt(dateRange.end)}`;
-  } else {
-    subtitle.textContent = 'Số liệu tổng hợp toàn bộ dữ liệu';
-  }
+  // Periods sorted desc (newest first)
+  const periodList = [...allPeriods].sort((a, b) => b.localeCompare(a));
 
-  // Empty state
-  if (totalNet === 0 && totalCust === 0 && totalOrders === 0) {
+  // Empty check
+  const hasAnyData = spaBranches.some(b => [...byBranchPeriod[b.id].values()].some(p => p.net || p.customers || p.orders));
+  if (!hasAnyData) {
     area.innerHTML = `<div class="empty" style="padding:30px 20px;">
       <h3 style="font-size:14px;color:var(--text-muted);">Chưa có dữ liệu trong khoảng đã chọn</h3>
       <p style="font-size:12px;color:var(--text-muted);">Nhập file Excel doanh số để bắt đầu, hoặc mở rộng khoảng thời gian.</p>
@@ -2272,59 +2290,147 @@ function renderBranchMetrics() {
     return;
   }
 
-  // Build rows
-  const rows = spaBranches.map(b => {
-    const s = stats[b.id];
-    const aov  = s.orders    ? Math.round(s.net / s.orders)    : 0;
-    const arpu = s.customers ? Math.round(s.net / s.customers) : 0;
+  // Build per-branch sections + a final "Toàn hệ thống 3AM" section
+  const periodColLabel = isMonthly ? 'Tháng' : 'Tuần';
+  let html = '';
+
+  spaBranches.forEach(b => {
+    const byPeriod = byBranchPeriod[b.id];
+    const periodsForBranch = periodList.filter(pk => {
+      const p = byPeriod.get(pk);
+      return p && (p.customers || p.orders || p.net);
+    });
+    if (periodsForBranch.length === 0) return;  // skip empty branch
+
+    let branchTotalCust = 0, branchTotalOrders = 0, branchTotalNet = 0;
+    const rowsHtml = periodsForBranch.map(pk => {
+      const p = byPeriod.get(pk);
+      branchTotalCust   += p.customers;
+      branchTotalOrders += p.orders;
+      branchTotalNet    += p.net;
+      const aov  = p.orders    ? Math.round(p.net / p.orders)    : 0;
+      const arpu = p.customers ? Math.round(p.net / p.customers) : 0;
+      return `
+        <tr>
+          <td>${periodLabel(pk)}</td>
+          <td style="text-align:right;">${fmtNum(p.customers)}</td>
+          <td style="text-align:right;">${fmtNum(p.orders)}</td>
+          <td style="text-align:right;font-weight:600;">${fmtNum(p.net)}</td>
+          <td style="text-align:right;color:var(--text-muted);">${fmtNum(aov)}</td>
+          <td style="text-align:right;color:var(--text-muted);">${fmtNum(arpu)}</td>
+        </tr>`;
+    }).join('');
+
+    const totalAov  = branchTotalOrders ? Math.round(branchTotalNet / branchTotalOrders) : 0;
+    const totalArpu = branchTotalCust   ? Math.round(branchTotalNet / branchTotalCust)   : 0;
     const shortName = b.name.replace("3AM D'SPA · ", "");
-    return `
-      <tr>
-        <td>
-          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${b.color};margin-right:6px;vertical-align:middle;"></span>
-          <strong>${shortName}</strong>
-        </td>
-        <td style="text-align:right;">${fmtNum(s.customers)}</td>
-        <td style="text-align:right;">${fmtNum(s.orders)}</td>
-        <td style="text-align:right;font-weight:600;">${fmtNum(s.net)}</td>
-        <td style="text-align:right;color:var(--text-muted);">${fmtNum(aov)}</td>
-        <td style="text-align:right;color:var(--text-muted);">${fmtNum(arpu)}</td>
-      </tr>`;
-  }).join('');
 
-  // Total row (sum of 3 spa branches)
-  const totalAov  = totalOrders ? Math.round(totalNet / totalOrders) : 0;
-  const totalArpu = totalCust   ? Math.round(totalNet / totalCust)   : 0;
-  const totalRow = `
-    <tr style="border-top:2px solid var(--border);background:var(--surface-2);font-weight:600;">
-      <td><strong>Tổng (Toàn hệ thống 3AM)</strong></td>
-      <td style="text-align:right;">${fmtNum(totalCust)}</td>
-      <td style="text-align:right;">${fmtNum(totalOrders)}</td>
-      <td style="text-align:right;">${fmtNum(totalNet)}</td>
-      <td style="text-align:right;color:var(--text-muted);">${fmtNum(totalAov)}</td>
-      <td style="text-align:right;color:var(--text-muted);">${fmtNum(totalArpu)}</td>
-    </tr>`;
+    html += `
+      <div style="margin-top:18px;">
+        <h4 style="font-size:14px;font-weight:600;margin:0 0 6px;display:flex;align-items:center;gap:8px;">
+          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${b.color};"></span>
+          ${shortName}
+        </h4>
+        <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;">
+          <table class="ktv-table" style="width:100%;margin:0;">
+            <thead>
+              <tr>
+                <th>${periodColLabel}</th>
+                <th style="text-align:right;">Khách hàng</th>
+                <th style="text-align:right;">Số đơn</th>
+                <th style="text-align:right;">Doanh thu thuần (đ)</th>
+                <th style="text-align:right;">AOV (đ)</th>
+                <th style="text-align:right;">ARPU (đ)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+              <tr style="background:var(--surface-2);font-weight:600;border-top:2px solid var(--border);">
+                <td><strong>Tổng</strong></td>
+                <td style="text-align:right;">${fmtNum(branchTotalCust)}</td>
+                <td style="text-align:right;">${fmtNum(branchTotalOrders)}</td>
+                <td style="text-align:right;">${fmtNum(branchTotalNet)}</td>
+                <td style="text-align:right;color:var(--text-muted);">${fmtNum(totalAov)}</td>
+                <td style="text-align:right;color:var(--text-muted);">${fmtNum(totalArpu)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  });
 
-  area.innerHTML = `
-    <div style="overflow-x:auto;">
-      <table class="ktv-table" style="margin-top:6px;width:100%;">
-        <thead>
-          <tr>
-            <th>Cơ sở</th>
-            <th style="text-align:right;">Khách hàng</th>
-            <th style="text-align:right;">Số đơn</th>
-            <th style="text-align:right;">Doanh thu thuần (đ)</th>
-            <th style="text-align:right;" title="Average Order Value = DT thuần / Số đơn">AOV (đ)</th>
-            <th style="text-align:right;" title="Average Revenue Per User = DT thuần / Số khách">ARPU (đ)</th>
-          </tr>
-        </thead>
-        <tbody>${rows}${totalRow}</tbody>
-      </table>
-    </div>
-    <p style="font-size:11px;color:var(--text-muted);margin-top:8px;line-height:1.5;">
-      <strong>AOV</strong> = Doanh thu thuần / Số đơn (giá trị trung bình mỗi đơn) ·
-      <strong>ARPU</strong> = Doanh thu thuần / Số khách (DT trung bình mỗi khách).
+  // System-wide section: aggregate all 3 spa branches per period
+  const systemByPeriod = new Map();
+  spaBranches.forEach(b => {
+    byBranchPeriod[b.id].forEach((p, pk) => {
+      if (!systemByPeriod.has(pk)) systemByPeriod.set(pk, { customers: 0, orders: 0, net: 0 });
+      const s = systemByPeriod.get(pk);
+      s.customers += p.customers; s.orders += p.orders; s.net += p.net;
+    });
+  });
+  const systemPeriods = periodList.filter(pk => {
+    const p = systemByPeriod.get(pk);
+    return p && (p.customers || p.orders || p.net);
+  });
+  if (systemPeriods.length > 0) {
+    let sysTotalCust = 0, sysTotalOrders = 0, sysTotalNet = 0;
+    const sysRows = systemPeriods.map(pk => {
+      const p = systemByPeriod.get(pk);
+      sysTotalCust += p.customers; sysTotalOrders += p.orders; sysTotalNet += p.net;
+      const aov  = p.orders    ? Math.round(p.net / p.orders)    : 0;
+      const arpu = p.customers ? Math.round(p.net / p.customers) : 0;
+      return `
+        <tr>
+          <td>${periodLabel(pk)}</td>
+          <td style="text-align:right;">${fmtNum(p.customers)}</td>
+          <td style="text-align:right;">${fmtNum(p.orders)}</td>
+          <td style="text-align:right;font-weight:600;">${fmtNum(p.net)}</td>
+          <td style="text-align:right;color:var(--text-muted);">${fmtNum(aov)}</td>
+          <td style="text-align:right;color:var(--text-muted);">${fmtNum(arpu)}</td>
+        </tr>`;
+    }).join('');
+    const sysAov  = sysTotalOrders ? Math.round(sysTotalNet / sysTotalOrders) : 0;
+    const sysArpu = sysTotalCust   ? Math.round(sysTotalNet / sysTotalCust)   : 0;
+
+    html += `
+      <div style="margin-top:22px;padding-top:18px;border-top:2px dashed var(--border);">
+        <h4 style="font-size:14px;font-weight:700;margin:0 0 6px;display:flex;align-items:center;gap:8px;">
+          🏢 Toàn hệ thống 3AM
+        </h4>
+        <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;">
+          <table class="ktv-table" style="width:100%;margin:0;">
+            <thead>
+              <tr>
+                <th>${periodColLabel}</th>
+                <th style="text-align:right;">Khách hàng</th>
+                <th style="text-align:right;">Số đơn</th>
+                <th style="text-align:right;">Doanh thu thuần (đ)</th>
+                <th style="text-align:right;">AOV (đ)</th>
+                <th style="text-align:right;">ARPU (đ)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sysRows}
+              <tr style="background:var(--surface-2);font-weight:700;border-top:2px solid var(--border);">
+                <td><strong>Tổng</strong></td>
+                <td style="text-align:right;">${fmtNum(sysTotalCust)}</td>
+                <td style="text-align:right;">${fmtNum(sysTotalOrders)}</td>
+                <td style="text-align:right;">${fmtNum(sysTotalNet)}</td>
+                <td style="text-align:right;color:var(--text-muted);">${fmtNum(sysAov)}</td>
+                <td style="text-align:right;color:var(--text-muted);">${fmtNum(sysArpu)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  html += `
+    <p style="font-size:11px;color:var(--text-muted);margin-top:14px;line-height:1.5;">
+      AOV = giá trị trung bình mỗi đơn · ARPU = DT trung bình mỗi khách.
     </p>`;
+
+  area.innerHTML = html;
 }
 
 /* ==========================================================
