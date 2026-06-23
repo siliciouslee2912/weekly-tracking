@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.09" />
+<meta name="version" content="v2026.06.22.10" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 metrics-period-section -->
+<!-- BUILD: 2026-06-22 ktv-stats-responsive -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -4075,9 +4075,9 @@ function renderKtvView() {
   // Date info
   const allDates = sessionsForBranch.map(s => s.date).sort();
   const filteredDates = filtered.map(s => s.date).sort();
-  document.getElementById('ktvDateInfo').textContent = filteredDates.length
-    ? `Lọc: ${filteredDates[0]} → ${filteredDates[filteredDates.length-1]} (${fmtNum(filtered.length)} ca / ${fmtNum(sessionsForBranch.length)} tổng)`
-    : `Toàn bộ: ${allDates[0]} → ${allDates[allDates.length-1]} (${fmtNum(sessionsForBranch.length)} ca)`;
+  // ktvDateInfo subtext removed per user request — date range already visible
+  // in the date picker; this redundant info clutters the header.
+  document.getElementById('ktvDateInfo').textContent = '';
 
   // === Roster: who's active vs resigned ===
   // Build employee → lastSeen map across ALL sessions (not filtered, for accurate resignation status)
@@ -4125,17 +4125,21 @@ function renderKtvView() {
   const avgPerWeek = weeksInRange  ? (totalSessions / weeksInRange).toFixed(0) : '0';
   const avgPerMonth= monthsInRange ? (totalSessions / monthsInRange).toFixed(0): '0';
 
+  // The 4th stat card (and the time-series chart) follow the period toggle
+  const period = DATA.ktvPeriodToggle || 'month';
+  let avgLabel, avgValue;
+  if (period === 'month')      { avgLabel = 'Trung bình / tháng'; avgValue = fmtNum(avgPerMonth); }
+  else if (period === 'week')  { avgLabel = 'Trung bình / tuần';  avgValue = fmtNum(avgPerWeek); }
+  else                         { avgLabel = 'Trung bình / ngày';  avgValue = avgPerDay; }
+
   document.getElementById('ktvSummary').innerHTML = `
     <div class="pnl-summary-card"><div class="label">Tổng số ca</div><div class="value">${fmtNum(totalSessions)}</div></div>
     <div class="pnl-summary-card"><div class="label">KTV đang làm</div><div class="value">${activeCount}</div><div class="hint">${resignedEmps.size} đã nghỉ</div></div>
     <div class="pnl-summary-card"><div class="label">KH unique</div><div class="value">${fmtNum(uniqueCustomers)}</div></div>
-    <div class="pnl-summary-card"><div class="label">Trung bình / tháng</div><div class="value">${fmtNum(avgPerMonth)}</div></div>
-    <div class="pnl-summary-card"><div class="label">Trung bình / tuần</div><div class="value">${fmtNum(avgPerWeek)}</div></div>
-    <div class="pnl-summary-card"><div class="label">Trung bình / ngày</div><div class="value">${avgPerDay}</div></div>
+    <div class="pnl-summary-card"><div class="label">${avgLabel}</div><div class="value">${avgValue}</div></div>
   `;
 
-  // === Time series chart (sessions over time) ===
-  const period = DATA.ktvPeriodToggle || 'month';
+  // === Time series chart (sessions over time) — uses same `period` toggle ===
   const subtitleMap = { month: 'Tổng số ca theo từng tháng', week: 'Tổng số ca theo từng tuần (Mon-Sun)', day: 'Tổng số ca theo từng ngày' };
   document.getElementById('ktvTimeSeriesSubtitle').textContent = subtitleMap[period];
   document.querySelectorAll('#ktvPeriodToggle .metric-toggle').forEach(el => {
