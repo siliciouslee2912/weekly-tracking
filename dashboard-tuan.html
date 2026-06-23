@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.01" />
+<meta name="version" content="v2026.06.22.02" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 ktv-phase-1 -->
+<!-- BUILD: 2026-06-22 ktv-firestore-split -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -2595,37 +2595,138 @@ async function signInAnon() {
 }
 
 const FIRESTORE_DOC = 'dashboard/main';
+// KTV sessions storage: per-branch separate docs to avoid 1MB limit on main doc.
+// Each doc holds compressed {emps[], svcs[], rows[[empIdx, date, time, cust, phone, svcIdx]]}.
+const FIRESTORE_KTV_DOC = (branchId) => `dashboard/ktv_${branchId}`;
+
+// ===== KTV session compression =====
+// Why: raw JSON of 9000 sessions = 1.4 MB > Firestore 1 MB limit. Compressed
+// form replaces repeated employee/service names with integer indices into
+// shared lookup arrays. Typical compression 65% (1.4MB → ~500KB per branch
+// per 5 months). Safe to split per branch in case any single branch exceeds.
+function compressKtvSessions(sessions) {
+  const emps = []; const empIdx = new Map();
+  const svcs = []; const svcIdx = new Map();
+  const rows = [];
+  for (const s of sessions) {
+    if (!empIdx.has(s.name))    { empIdx.set(s.name, emps.length);    emps.push(s.name); }
+    if (!svcIdx.has(s.service)) { svcIdx.set(s.service, svcs.length); svcs.push(s.service); }
+    rows.push([empIdx.get(s.name), s.date, s.time, s.customer || '', s.phone || '', svcIdx.get(s.service)]);
+  }
+  return { v: 1, emps, svcs, rows };
+}
+function decompressKtvSessions(compressed, branchId) {
+  if (!compressed || !Array.isArray(compressed.rows)) return [];
+  return compressed.rows.map(r => ({
+    branchId,
+    name:     compressed.emps[r[0]] || '',
+    date:     r[1] || '',
+    time:     r[2] || '',
+    customer: r[3] || '',
+    phone:    r[4] || '',
+    service:  compressed.svcs[r[5]] || ''
+  }));
+}
+
 async function loadFromFirestore() {
   if (!_firestoreDb) return null;
   try {
     updateSyncIndicator('syncing', 'Đang tải…');
-    const docRef = _firestoreDb.doc(FIRESTORE_DOC);
-    const snap = await docRef.get();
-    if (snap.exists) {
-      updateSyncIndicator('online', 'Đã đồng bộ');
-      return snap.data().payload || null;
+    // Load main doc + all per-branch KTV docs in parallel
+    const mainPromise = _firestoreDb.doc(FIRESTORE_DOC).get();
+    const branchIds = ['tx-soan', 'cau-giay', 'ha-dong', 'sca'];
+    const ktvPromises = branchIds.map(bid => _firestoreDb.doc(FIRESTORE_KTV_DOC(bid)).get().catch(() => null));
+    const [mainSnap, ...ktvSnaps] = await Promise.all([mainPromise, ...ktvPromises]);
+
+    if (!mainSnap.exists) {
+      updateSyncIndicator('online', 'Chưa có dữ liệu');
+      return null;
     }
-    updateSyncIndicator('online', 'Chưa có dữ liệu');
-    return null;
+    const payload = mainSnap.data().payload || {};
+
+    // Merge KTV sessions from per-branch docs
+    const allKtvSessions = [];
+    ktvSnaps.forEach((snap, i) => {
+      if (snap && snap.exists) {
+        const compressed = snap.data();
+        const decompressed = decompressKtvSessions(compressed, branchIds[i]);
+        allKtvSessions.push(...decompressed);
+      }
+    });
+    // If we loaded from new docs, use them; else preserve whatever was in main payload (legacy)
+    if (allKtvSessions.length > 0) {
+      payload.ktvSessions = allKtvSessions;
+    } else if (!Array.isArray(payload.ktvSessions)) {
+      payload.ktvSessions = [];
+    }
+
+    updateSyncIndicator('online', 'Đã đồng bộ');
+    return payload;
   } catch (e) {
     console.error('Firestore load failed:', e);
     updateSyncIndicator('offline', 'Offline');
     return null;
   }
 }
+
 let _saveTimer = null;
+let _ktvSaveTimer = null;
+// Track which branches have pending KTV changes so we only re-save what changed.
+const _ktvDirtyBranches = new Set();
+
+async function saveKtvBranchToFirestore(branchId, sessions) {
+  if (!_firestoreDb) return false;
+  try {
+    const compressed = compressKtvSessions(sessions);
+    await _firestoreDb.doc(FIRESTORE_KTV_DOC(branchId)).set({
+      ...compressed,
+      _updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    return true;
+  } catch (e) {
+    console.error(`KTV save failed for ${branchId}:`, e);
+    return false;
+  }
+}
+
+async function saveAllDirtyKtvBranches(data) {
+  if (!_firestoreDb || !Array.isArray(data.ktvSessions)) return;
+  // Group sessions by branchId
+  const byBranch = {};
+  for (const s of data.ktvSessions) {
+    if (!byBranch[s.branchId]) byBranch[s.branchId] = [];
+    byBranch[s.branchId].push(s);
+  }
+  // Save all dirty branches in parallel
+  const dirty = [..._ktvDirtyBranches];
+  _ktvDirtyBranches.clear();
+  await Promise.all(dirty.map(bid => saveKtvBranchToFirestore(bid, byBranch[bid] || [])));
+  // Also save any branches that have data but weren't in dirty set (defensive)
+  for (const bid of Object.keys(byBranch)) {
+    if (!dirty.includes(bid)) {
+      // Not dirty, no need to re-upload
+    }
+  }
+}
+
 async function saveToFirestore(data) {
   if (!_firestoreDb) return false;
-  // Debounce
+  // Debounce both main payload and KTV docs
   clearTimeout(_saveTimer);
+  clearTimeout(_ktvSaveTimer);
   return new Promise(resolve => {
     _saveTimer = setTimeout(async () => {
       try {
         updateSyncIndicator('syncing', 'Đang lưu…');
+        // Strip ktvSessions before saving to main doc (avoid 1 MB limit)
+        const mainPayload = { ...data };
+        delete mainPayload.ktvSessions;
         await _firestoreDb.doc(FIRESTORE_DOC).set({
-          payload: data,
+          payload: mainPayload,
           _updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
+        // Save KTV branches that have pending changes
+        await saveAllDirtyKtvBranches(data);
         updateSyncIndicator('online', 'Đã đồng bộ');
         resolve(true);
       } catch (e) {
@@ -2722,6 +2823,20 @@ async function loadDataAndRender() {
   if (!Array.isArray(data.ktvSessions)) data.ktvSessions = [];
   // Clean up legacy hardcoded ktv object if it exists
   if (data.ktv) { delete data.ktv; }
+
+  // MIGRATION: if KTV sessions exist locally but Firestore main payload doesn't
+  // have them (e.g. from a failed save when main doc > 1MB), push them to the
+  // new per-branch KTV docs.
+  if (_firebaseReady && _firebaseAuth && _firebaseAuth.currentUser && data.ktvSessions.length > 0) {
+    // Check if any branch's KTV doc on Firestore is missing
+    const branchesPresent = new Set(data.ktvSessions.map(s => s.branchId));
+    branchesPresent.forEach(bid => _ktvDirtyBranches.add(bid));
+    // Trigger save to upload all dirty branches
+    if (_ktvDirtyBranches.size > 0) {
+      console.log(`[Migration] Uploading ${data.ktvSessions.length} KTV sessions to per-branch Firestore docs...`);
+      // Will be picked up by saveData call below
+    }
+  }
 
   // MIGRATION (2026-05-14): branch ID rename 'quan-hoa' → 'cau-giay'.
   // Rewrite any pre-existing entries that still carry the old ID so all
@@ -3447,6 +3562,9 @@ function confirmKtvUpload() {
     }
   }
 
+  // Mark this branch's KTV sessions as needing Firestore save (must be BEFORE saveData
+  // so the debounced save picks up the dirty marker)
+  if (typeof _ktvDirtyBranches !== 'undefined') _ktvDirtyBranches.add(r.branchId);
   saveData(DATA);
   renderAll();
 
