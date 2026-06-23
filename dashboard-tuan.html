@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.06" />
+<meta name="version" content="v2026.06.22.07" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 ktv-schema-v2 -->
+<!-- BUILD: 2026-06-22 branch-metrics -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -519,14 +519,14 @@
         <div class="chart-wrap"><canvas id="studentCourseChart"></canvas></div>
       </section>
 
-      <section class="table-card" id="tableCardSection">
+      <section class="table-card" id="branchMetricsCard">
         <div class="table-head">
           <div>
-            <h3 id="tableTitle">Dữ liệu tuần đã nhập</h3>
-            <p style="color:var(--text-muted);font-size:12px;margin-top:2px;">Bấm sửa để cập nhật, hoặc xoá để loại bỏ</p>
+            <h3 id="branchMetricsTitle">Tổng quan theo cơ sở</h3>
+            <p style="color:var(--text-muted);font-size:12px;margin-top:2px;" id="branchMetricsSubtitle">Số liệu tổng hợp trong khoảng đã chọn</p>
           </div>
         </div>
-        <div id="tableArea"></div>
+        <div id="branchMetricsArea" style="padding:0 16px 16px;"></div>
       </section>
       </div><!-- /#defaultView -->
 
@@ -2208,144 +2208,123 @@ function renderStudentCourseChart(){
    RENDER: TABLE
 ========================================================== */
 function renderTable(){
-  // Hide entire table card in monthly mode — only meaningful at week granularity
-  const section = document.getElementById('tableCardSection');
-  if (section) section.style.display = (activeMode === 'monthly') ? 'none' : '';
-  if (activeMode === 'monthly') return;
+  // Renamed semantically: this now renders the per-branch metrics summary
+  // (Cơ sở · Khách · Số đơn · DT thuần · AOV · ARPU) for BOTH monthly and
+  // weekly modes. Date range filter applies via getEntries().
+  renderBranchMetrics();
+}
 
-  // Aggregate daily entries → display as one row per week (otherwise 210+ daily
-  // rows would clutter the UI). Legacy weekly entries (no .date) pass through
-  // unchanged. Keys: branchId + weekStart.
-  const rawEntries = getEntries(activeBranch);
-  const weeklyAgg = new Map();
-  for (const e of rawEntries) {
-    const wk = e.weekStart || toISODate(startOfWeek(new Date(e.date)));
-    const k = e.branchId + '|' + wk;
-    let g = weeklyAgg.get(k);
-    if (!g) {
-      g = {
-        id: 'agg-' + k,                  // synthetic id (edit/delete disabled for aggregated rows)
-        branchId: e.branchId,
-        weekStart: wk,
-        newCustTotal: 0, returning: 0, orders: 0,
-        sources: {}, leads: {},
-        courses: COURSES.reduce((o,c)=>(o[c.id]={count:0,revenue:0,promotion:0},o),{}),
-        revenue: { service: 0, product: 0, courses: 0 },
-        promotions: { service: 0, product: 0, courses: 0 },
-        promoVoucher: { service: 0, product: 0, courses: 0 },
-        leadsTotal: 0, studentTotal: 0,
-        _hasDaily: false, _hasLegacy: false, _dailyCount: 0
-      };
-      weeklyAgg.set(k, g);
-    }
-    g.newCustTotal += (e.newCustTotal || 0);
-    g.returning    += (e.returning || 0);
-    g.orders       += (e.orders || 0);
-    g.revenue.service += (e.revenue?.service || 0);
-    g.revenue.product += (e.revenue?.product || 0);
-    g.revenue.courses += (e.revenue?.courses || 0);
-    g.promotions.service += (e.promotions?.service || 0);
-    g.promotions.product += (e.promotions?.product || 0);
-    g.promoVoucher.service += (e.promoVoucher?.service || 0);
-    g.promoVoucher.product += (e.promoVoucher?.product || 0);
-    g.leadsTotal   += (e.leadsTotal || 0);
-    g.studentTotal += (e.studentTotal || 0);
-    COURSES.forEach(c => {
-      g.courses[c.id].count    += (e.courses?.[c.id]?.count || 0);
-      g.courses[c.id].revenue  += (e.courses?.[c.id]?.revenue || 0);
-    });
-    if (e.date) { g._hasDaily = true; g._dailyCount += 1; }
-    else { g._hasLegacy = true; }
-  }
-  const entries = [...weeklyAgg.values()].sort((a,b) =>
-    b.weekStart.localeCompare(a.weekStart) || a.branchId.localeCompare(b.branchId)
-  );
-  const area = $('#tableArea');
-  $('#tableTitle').textContent = 'Dữ liệu tuần đã nhập';
+function renderBranchMetrics() {
+  const section = document.getElementById('branchMetricsCard');
+  if (!section) return;
+  section.style.display = '';  // show in both monthly and weekly modes
 
-  if (entries.length === 0) {
-    area.innerHTML = `
-      <div class="empty">
-        <div class="empty-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg>
-        </div>
-        <h3>Chưa có dữ liệu tuần nào</h3>
-        <p>Bấm "Nhập Excel" ở góc trên để upload file doanh số.</p>
-      </div>`;
+  // Only show on overview and customers views (not courses/leads/students/conversion)
+  if (activeView !== 'overview' && activeView !== 'customers') {
+    section.style.display = 'none';
     return;
   }
 
-  const rows = entries.map(e => {
-    const b = getBranch(e.branchId);
-    const totalCust = entryCustomers(e);
-    const totalLeadsE = entryLeads(e);
-    const totalRev = entryRevenue(e);
-    const courseCnt = entryCourseCount(e);
-    let detailCol;
-    if (b.type === 'spa') {
-      detailCol = `
-        <td class="num" style="color:var(--text-muted);">—</td>
-        <td class="num" style="color:var(--primary);">${fmtVND(e.revenue?.service || 0)}</td>
-        <td class="num" style="color:var(--yellow);">${fmtVND(e.revenue?.product || 0)}</td>
-      `;
-    } else {
-      const conv = totalLeadsE ? (totalCust / totalLeadsE * 100).toFixed(0) + '%' : '—';
-      detailCol = `
-        <td class="num strong" style="color:var(--pink);">${fmtNum(totalLeadsE)} <span style="color:var(--text-muted);font-weight:400;font-size:11px;">(${conv})</span></td>
-        <td class="num strong" style="color:var(--purple);">${fmtNum(courseCnt)} khoá</td>
-        <td class="num" style="color:var(--purple);font-size:11px;">${COURSES.map(c => c.icon + (e.courses?.[c.id]?.count || 0)).join(' · ')}</td>
-      `;
+  const area = document.getElementById('branchMetricsArea');
+  const subtitle = document.getElementById('branchMetricsSubtitle');
+
+  // Spa branches only (SCA Academy has different model)
+  const spaBranches = BRANCHES.filter(b => b.type === 'spa');
+
+  // Aggregate per branch from daily entries within active date range
+  const stats = {};
+  spaBranches.forEach(b => { stats[b.id] = { branchId: b.id, name: b.name, color: b.color,
+                                              customers: 0, orders: 0, net: 0 }; });
+  let totalCust = 0, totalOrders = 0, totalNet = 0;
+
+  for (const b of spaBranches) {
+    const entries = getEntries(b.id);  // already dateRange-filtered
+    for (const e of entries) {
+      // Customers: newCustTotal + returning (per daily entry, these are distinct counts for that day)
+      const custForEntry = (e.newCustTotal || 0) + (e.returning || 0);
+      stats[b.id].customers += custForEntry;
+      stats[b.id].orders    += (e.orders || 0);
+      // Net = revenue (gross) minus promotions (CTKM + voucher)
+      const gross   = (e.revenue?.service || 0) + (e.revenue?.product || 0);
+      const promo   = (e.promotions?.service || 0) + (e.promotions?.product || 0);
+      const voucher = (e.promoVoucher?.service || 0) + (e.promoVoucher?.product || 0);
+      stats[b.id].net += (gross - promo - voucher);
     }
+    totalCust   += stats[b.id].customers;
+    totalOrders += stats[b.id].orders;
+    totalNet    += stats[b.id].net;
+  }
+
+  // Subtitle reflects date range
+  if (dateRange.start && dateRange.end) {
+    const fmt = (s) => { const [y,m,d] = s.split('-'); return `${d}/${m}/${y.slice(2)}`; };
+    subtitle.textContent = `Số liệu tổng hợp · ${fmt(dateRange.start)} → ${fmt(dateRange.end)}`;
+  } else {
+    subtitle.textContent = 'Số liệu tổng hợp toàn bộ dữ liệu';
+  }
+
+  // Empty state
+  if (totalNet === 0 && totalCust === 0 && totalOrders === 0) {
+    area.innerHTML = `<div class="empty" style="padding:30px 20px;">
+      <h3 style="font-size:14px;color:var(--text-muted);">Chưa có dữ liệu trong khoảng đã chọn</h3>
+      <p style="font-size:12px;color:var(--text-muted);">Nhập file Excel doanh số để bắt đầu, hoặc mở rộng khoảng thời gian.</p>
+    </div>`;
+    return;
+  }
+
+  // Build rows
+  const rows = spaBranches.map(b => {
+    const s = stats[b.id];
+    const aov  = s.orders    ? Math.round(s.net / s.orders)    : 0;
+    const arpu = s.customers ? Math.round(s.net / s.customers) : 0;
+    const shortName = b.name.replace("3AM D'SPA · ", "");
     return `
       <tr>
-        <td><span class="week-pill">${weekLabel(e.weekStart)}</span></td>
-        <td><span class="branch-tag" style="background:${b.color}18;color:${b.color};"><span class="dot" style="background:${b.color}"></span>${b.name}</span></td>
-        <td class="num strong">${fmtNum(totalCust)}</td>
-        <td class="num strong" style="color:#8b5cf6;">${e.orders ? fmtNum(e.orders) : '—'}</td>
-        ${detailCol}
-        <td class="num strong">${fmtVND(totalRev)}</td>
         <td>
-          ${e._hasDaily ? `<span style="color:var(--text-muted);font-size:11px;font-style:italic;">${e._dailyCount} ngày upload</span>` : `
-          <div class="row-actions">
-            <button class="row-btn danger" title="Xoá" onclick="deleteEntry('${e.id}')">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
-            </button>
-          </div>`}
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${b.color};margin-right:6px;vertical-align:middle;"></span>
+          <strong>${shortName}</strong>
         </td>
-      </tr>
-    `;
+        <td style="text-align:right;">${fmtNum(s.customers)}</td>
+        <td style="text-align:right;">${fmtNum(s.orders)}</td>
+        <td style="text-align:right;font-weight:600;">${fmtNum(s.net)}</td>
+        <td style="text-align:right;color:var(--text-muted);">${fmtNum(aov)}</td>
+        <td style="text-align:right;color:var(--text-muted);">${fmtNum(arpu)}</td>
+      </tr>`;
   }).join('');
 
-  // Determine column headers based on whether we have mixed types
-  const hasSpa = entries.some(e => getBranch(e.branchId).type === 'spa');
-  const hasAcademy = entries.some(e => getBranch(e.branchId).type === 'academy');
-  let colHeaders;
-  if (hasSpa && !hasAcademy) {
-    colHeaders = '<th style="text-align:right;">Leads</th><th style="text-align:right;">DT Dịch vụ</th><th style="text-align:right;">DT Sản phẩm</th>';
-  } else if (!hasSpa && hasAcademy) {
-    colHeaders = '<th style="text-align:right;">Leads (CR)</th><th style="text-align:right;">Khoá đã bán</th><th>Chi tiết khoá</th>';
-  } else {
-    colHeaders = '<th style="text-align:right;">Leads</th><th colspan="2">Chi tiết</th>';
-  }
+  // Total row (sum of 3 spa branches)
+  const totalAov  = totalOrders ? Math.round(totalNet / totalOrders) : 0;
+  const totalArpu = totalCust   ? Math.round(totalNet / totalCust)   : 0;
+  const totalRow = `
+    <tr style="border-top:2px solid var(--border);background:var(--surface-2);font-weight:600;">
+      <td><strong>Tổng (Toàn hệ thống 3AM)</strong></td>
+      <td style="text-align:right;">${fmtNum(totalCust)}</td>
+      <td style="text-align:right;">${fmtNum(totalOrders)}</td>
+      <td style="text-align:right;">${fmtNum(totalNet)}</td>
+      <td style="text-align:right;color:var(--text-muted);">${fmtNum(totalAov)}</td>
+      <td style="text-align:right;color:var(--text-muted);">${fmtNum(totalArpu)}</td>
+    </tr>`;
 
   area.innerHTML = `
     <div style="overflow-x:auto;">
-      <table>
+      <table class="ktv-table" style="margin-top:6px;width:100%;">
         <thead>
           <tr>
-            <th>Tuần</th>
             <th>Cơ sở</th>
-            <th style="text-align:right;">Khách</th>
+            <th style="text-align:right;">Khách hàng</th>
             <th style="text-align:right;">Số đơn</th>
-            ${colHeaders}
-            <th style="text-align:right;">Tổng DT</th>
-            <th></th>
+            <th style="text-align:right;">Doanh thu thuần (đ)</th>
+            <th style="text-align:right;" title="Average Order Value = DT thuần / Số đơn">AOV (đ)</th>
+            <th style="text-align:right;" title="Average Revenue Per User = DT thuần / Số khách">ARPU (đ)</th>
           </tr>
         </thead>
-        <tbody>${rows}</tbody>
+        <tbody>${rows}${totalRow}</tbody>
       </table>
     </div>
-  `;
+    <p style="font-size:11px;color:var(--text-muted);margin-top:8px;line-height:1.5;">
+      <strong>AOV</strong> = Doanh thu thuần / Số đơn (giá trị trung bình mỗi đơn) ·
+      <strong>ARPU</strong> = Doanh thu thuần / Số khách (DT trung bình mỗi khách).
+    </p>`;
 }
 
 /* ==========================================================
