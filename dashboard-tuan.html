@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.11" />
+<meta name="version" content="v2026.06.22.12" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 ktv-redesign -->
+<!-- BUILD: 2026-06-22 ktv-table-period-view -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -559,12 +559,19 @@
 
         <!-- Active KTV table -->
         <section class="card" id="ktvActiveCard" style="display:none;">
-          <div class="card-head">
-            <h3>Bảng xếp hạng KTV đang làm</h3>
-            <p style="font-size:12px;color:var(--text-muted);">Bấm cột để sort. KTV >4 tuần không có ca sẽ chuyển sang mục "Đã nghỉ" bên dưới.</p>
+          <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+            <div>
+              <h3>Bảng xếp hạng KTV đang làm</h3>
+              <p style="font-size:12px;color:var(--text-muted);">KTV >4 tuần không có ca sẽ chuyển sang mục "Đã nghỉ" bên dưới.</p>
+            </div>
+            <div class="metric-toggle-bar" id="ktvTableViewToggle" style="display:inline-flex;background:var(--surface-2);border-radius:8px;padding:3px;">
+              <div class="metric-toggle on" data-view="total" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tổng</div>
+              <div class="metric-toggle" data-view="month" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Theo tháng</div>
+              <div class="metric-toggle" data-view="week" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Theo tuần</div>
+            </div>
           </div>
-          <div class="card-body" style="padding:6px 16px 16px;overflow-x:auto;">
-            <table class="ktv-table" id="ktvTable"></table>
+          <div class="card-body" id="ktvTableArea" style="padding:6px 16px 16px;overflow-x:auto;">
+            <!-- One or many tables rendered here depending on view mode -->
           </div>
         </section>
 
@@ -4175,37 +4182,108 @@ function renderKtvView() {
     });
   }
 
-  // === Active KTV table ===
+  // === Active KTV table — with view toggle (Tổng / Theo tháng / Theo tuần) ===
+  if (!DATA.ktvTableView) DATA.ktvTableView = 'total';
+  const tableView = DATA.ktvTableView;
+
+  // Toggle UI sync
+  document.querySelectorAll('#ktvTableViewToggle .metric-toggle').forEach(el => {
+    el.classList.toggle('on', el.dataset.view === tableView);
+    el.style.background = el.dataset.view === tableView ? 'var(--bg)' : 'transparent';
+    el.style.color = el.dataset.view === tableView ? 'var(--accent)' : 'var(--text-muted)';
+    el.onclick = () => { DATA.ktvTableView = el.dataset.view; renderKtvView(); };
+  });
+
+  const tableArea = document.getElementById('ktvTableArea');
   const activeEmpList = empsList.filter(e => activeEmps.has(e.name));
-  const tbl = document.getElementById('ktvTable');
+
   if (activeEmpList.length === 0) {
-    tbl.innerHTML = '<thead><tr><th>KTV</th></tr></thead><tbody><tr><td style="text-align:center;color:var(--text-muted);padding:20px;">Không có KTV nào trong khoảng thời gian này</td></tr></tbody>';
+    tableArea.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;">Không có KTV nào trong khoảng thời gian này</div>';
   } else {
-    let html = `<thead><tr>
-      <th>#</th><th>KTV</th><th style="text-align:right;">Số ca</th>
-      <th style="text-align:right;">KH unique</th><th style="text-align:right;">Ca/KH</th>
-      <th style="text-align:right;">DV khác nhau</th><th>Top dịch vụ</th>
-      <th style="text-align:right;">Ngày làm cuối</th>
-    </tr></thead><tbody>`;
-    activeEmpList.forEach((e, idx) => {
-      const custCount = e.customers.size;
-      const svcCount = Object.keys(e.services).length;
-      const topSvcs = Object.entries(e.services).sort((a, b) => b[1] - a[1]).slice(0, 3);
-      const topSvcsHtml = topSvcs.map(([n, c]) => `<span style="display:inline-block;background:var(--surface-2);border-radius:4px;padding:2px 6px;font-size:11px;margin:1px;">${n} <strong>·${c}</strong></span>`).join(' ');
-      const avgPerCust = custCount ? (e.sessions / custCount).toFixed(1) : '—';
-      html += `<tr>
-        <td>${idx + 1}</td>
-        <td class="name-col"><strong>${e.name}</strong></td>
-        <td style="text-align:right;font-weight:600;">${fmtNum(e.sessions)}</td>
-        <td style="text-align:right;">${fmtNum(custCount)}</td>
-        <td style="text-align:right;">${avgPerCust}</td>
-        <td style="text-align:right;">${svcCount}</td>
-        <td>${topSvcsHtml}</td>
-        <td style="text-align:right;color:var(--text-muted);font-size:11px;">${e.lastDate}</td>
-      </tr>`;
-    });
-    html += '</tbody>';
-    tbl.innerHTML = html;
+    // Helper: render one table from a list of {name, sessions, customers:Set, services:{}, lastDate}
+    function renderTableHtml(rows) {
+      let h = `<table class="ktv-table" style="width:100%;margin:0;">
+        <thead><tr>
+          <th>#</th><th>KTV</th><th style="text-align:right;">Số ca</th>
+          <th style="text-align:right;">KH unique</th><th style="text-align:right;">Ca/KH</th>
+          <th style="text-align:right;">DV khác nhau</th><th>Top dịch vụ</th>
+          <th style="text-align:right;">Ngày làm cuối</th>
+        </tr></thead><tbody>`;
+      rows.forEach((e, idx) => {
+        const custCount = e.customers.size;
+        const svcCount = Object.keys(e.services).length;
+        const topSvcs = Object.entries(e.services).sort((a, b) => b[1] - a[1]).slice(0, 3);
+        const topSvcsHtml = topSvcs.map(([n, c]) => `<span style="display:inline-block;background:var(--surface-2);border-radius:4px;padding:2px 6px;font-size:11px;margin:1px;">${n} <strong>·${c}</strong></span>`).join(' ');
+        const avgPerCust = custCount ? (e.sessions / custCount).toFixed(1) : '—';
+        h += `<tr>
+          <td>${idx + 1}</td>
+          <td class="name-col"><strong>${e.name}</strong></td>
+          <td style="text-align:right;font-weight:600;">${fmtNum(e.sessions)}</td>
+          <td style="text-align:right;">${fmtNum(custCount)}</td>
+          <td style="text-align:right;">${avgPerCust}</td>
+          <td style="text-align:right;">${svcCount}</td>
+          <td>${topSvcsHtml}</td>
+          <td style="text-align:right;color:var(--text-muted);font-size:11px;">${e.lastDate}</td>
+        </tr>`;
+      });
+      h += '</tbody></table>';
+      return h;
+    }
+
+    if (tableView === 'total') {
+      // Single combined table — same as before
+      tableArea.innerHTML = renderTableHtml(activeEmpList);
+    } else {
+      // Per-period: group filtered sessions by period for ACTIVE employees only,
+      // then render one table per period (newest first).
+      const isMonth = tableView === 'month';
+      const periodKeyOf = (s) => isMonth ? s.date.substring(0, 7) : toISO(mondayOfDate(new Date(s.date)));
+      const periodLabel = (key) => {
+        if (isMonth) {
+          const [y, m] = key.split('-');
+          return `Tháng ${parseInt(m,10)}/${y}`;
+        }
+        const start = new Date(key);
+        const end = new Date(start); end.setDate(end.getDate() + 6);
+        const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
+        return `Tuần ${fmt(start)} - ${fmt(end)} (${start.getFullYear()})`;
+      };
+
+      // Bucket sessions by period, only for active KTVs
+      const activeNames = new Set(activeEmpList.map(e => e.name));
+      const byPeriod = new Map();  // periodKey → Map(name → stats)
+      const allPeriods = new Set();
+      filtered.forEach(s => {
+        if (!activeNames.has(s.name)) return;
+        const pk = periodKeyOf(s);
+        allPeriods.add(pk);
+        if (!byPeriod.has(pk)) byPeriod.set(pk, new Map());
+        const empMap = byPeriod.get(pk);
+        if (!empMap.has(s.name)) {
+          empMap.set(s.name, { name: s.name, sessions: 0, customers: new Set(), services: {}, lastDate: s.date });
+        }
+        const r = empMap.get(s.name);
+        r.sessions++;
+        r.customers.add(s.phone || s.customer);
+        r.services[s.service] = (r.services[s.service] || 0) + 1;
+        if (s.date > r.lastDate) r.lastDate = s.date;
+      });
+
+      const sortedPeriods = [...allPeriods].sort((a, b) => b.localeCompare(a));
+      let html = '';
+      sortedPeriods.forEach(pk => {
+        const rows = [...byPeriod.get(pk).values()].sort((a, b) => b.sessions - a.sessions);
+        if (rows.length === 0) return;
+        html += `
+          <div style="margin-top:16px;">
+            <h4 style="font-size:14px;font-weight:600;margin:0 0 6px;">${periodLabel(pk)}</h4>
+            <div style="border:1px solid var(--border);border-radius:8px;overflow-x:auto;">
+              ${renderTableHtml(rows)}
+            </div>
+          </div>`;
+      });
+      tableArea.innerHTML = html || '<div style="text-align:center;color:var(--text-muted);padding:20px;">Không có dữ liệu</div>';
+    }
   }
 
   // === Resigned KTV section ===
