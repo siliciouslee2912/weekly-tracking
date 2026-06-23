@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.08" />
+<meta name="version" content="v2026.06.22.09" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 branch-metrics-per-period -->
+<!-- BUILD: 2026-06-22 metrics-period-section -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -2225,7 +2225,7 @@ function renderBranchMetrics() {
     return;
   }
 
-  // Clear subtitle — user removed it per request
+  // Clear subtitle per user request
   const subtitle = document.getElementById('branchMetricsSubtitle');
   if (subtitle) subtitle.textContent = '';
 
@@ -2243,20 +2243,18 @@ function renderBranchMetrics() {
   function periodLabel(key) {
     if (isMonthly) {
       const [y, m] = key.split('-');
-      return `T${parseInt(m,10)}/${y.slice(2)}`;
+      return `Tháng ${parseInt(m,10)}/${y}`;
     }
-    // Weekly: show as DD/MM - DD/MM (Mon-Sun)
+    // Weekly: show as "Tuần DD/MM - DD/MM (YYYY)"
     const start = new Date(key);
     const end = new Date(start); end.setDate(end.getDate() + 6);
     const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
-    return `${fmt(start)} - ${fmt(end)}`;
+    return `Tuần ${fmt(start)} - ${fmt(end)} (${start.getFullYear()})`;
   }
 
-  // Aggregate per (branchId, periodKey)
+  // Aggregate per (periodKey, branchId)
   const allPeriods = new Set();
-  const byBranchPeriod = {};  // branchId → Map(periodKey → {customers, orders, net})
-
-  spaBranches.forEach(b => { byBranchPeriod[b.id] = new Map(); });
+  const byPeriodBranch = new Map();  // periodKey → Map(branchId → {customers, orders, net})
 
   for (const b of spaBranches) {
     const entries = getEntries(b.id);  // already dateRange-filtered
@@ -2264,10 +2262,10 @@ function renderBranchMetrics() {
       const pk = periodKeyOf(e);
       if (!pk) continue;
       allPeriods.add(pk);
-      if (!byBranchPeriod[b.id].has(pk)) {
-        byBranchPeriod[b.id].set(pk, { customers: 0, orders: 0, net: 0 });
-      }
-      const slot = byBranchPeriod[b.id].get(pk);
+      if (!byPeriodBranch.has(pk)) byPeriodBranch.set(pk, new Map());
+      const branchMap = byPeriodBranch.get(pk);
+      if (!branchMap.has(b.id)) branchMap.set(b.id, { customers: 0, orders: 0, net: 0 });
+      const slot = branchMap.get(b.id);
       slot.customers += (e.newCustTotal || 0) + (e.returning || 0);
       slot.orders    += (e.orders || 0);
       const gross   = (e.revenue?.service || 0) + (e.revenue?.product || 0);
@@ -2280,9 +2278,7 @@ function renderBranchMetrics() {
   // Periods sorted desc (newest first)
   const periodList = [...allPeriods].sort((a, b) => b.localeCompare(a));
 
-  // Empty check
-  const hasAnyData = spaBranches.some(b => [...byBranchPeriod[b.id].values()].some(p => p.net || p.customers || p.orders));
-  if (!hasAnyData) {
+  if (periodList.length === 0) {
     area.innerHTML = `<div class="empty" style="padding:30px 20px;">
       <h3 style="font-size:14px;color:var(--text-muted);">Chưa có dữ liệu trong khoảng đã chọn</h3>
       <p style="font-size:12px;color:var(--text-muted);">Nhập file Excel doanh số để bắt đầu, hoặc mở rộng khoảng thời gian.</p>
@@ -2290,52 +2286,52 @@ function renderBranchMetrics() {
     return;
   }
 
-  // Build per-branch sections + a final "Toàn hệ thống 3AM" section
-  const periodColLabel = isMonthly ? 'Tháng' : 'Tuần';
+  // Build one section per period
   let html = '';
+  periodList.forEach(pk => {
+    const branchMap = byPeriodBranch.get(pk);
+    if (!branchMap) return;
 
-  spaBranches.forEach(b => {
-    const byPeriod = byBranchPeriod[b.id];
-    const periodsForBranch = periodList.filter(pk => {
-      const p = byPeriod.get(pk);
-      return p && (p.customers || p.orders || p.net);
-    });
-    if (periodsForBranch.length === 0) return;  // skip empty branch
-
-    let branchTotalCust = 0, branchTotalOrders = 0, branchTotalNet = 0;
-    const rowsHtml = periodsForBranch.map(pk => {
-      const p = byPeriod.get(pk);
-      branchTotalCust   += p.customers;
-      branchTotalOrders += p.orders;
-      branchTotalNet    += p.net;
+    let periodTotalCust = 0, periodTotalOrders = 0, periodTotalNet = 0;
+    const rowsHtml = spaBranches.map(b => {
+      const p = branchMap.get(b.id) || { customers: 0, orders: 0, net: 0 };
+      // Skip branch row if it has no data in this period
+      if (!p.customers && !p.orders && !p.net) return '';
+      periodTotalCust   += p.customers;
+      periodTotalOrders += p.orders;
+      periodTotalNet    += p.net;
       const aov  = p.orders    ? Math.round(p.net / p.orders)    : 0;
       const arpu = p.customers ? Math.round(p.net / p.customers) : 0;
+      const shortName = b.name.replace("3AM D'SPA · ", "");
       return `
         <tr>
-          <td>${periodLabel(pk)}</td>
+          <td>
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${b.color};margin-right:6px;vertical-align:middle;"></span>
+            ${shortName}
+          </td>
           <td style="text-align:right;">${fmtNum(p.customers)}</td>
           <td style="text-align:right;">${fmtNum(p.orders)}</td>
           <td style="text-align:right;font-weight:600;">${fmtNum(p.net)}</td>
           <td style="text-align:right;color:var(--text-muted);">${fmtNum(aov)}</td>
           <td style="text-align:right;color:var(--text-muted);">${fmtNum(arpu)}</td>
         </tr>`;
-    }).join('');
+    }).filter(Boolean).join('');
 
-    const totalAov  = branchTotalOrders ? Math.round(branchTotalNet / branchTotalOrders) : 0;
-    const totalArpu = branchTotalCust   ? Math.round(branchTotalNet / branchTotalCust)   : 0;
-    const shortName = b.name.replace("3AM D'SPA · ", "");
+    if (!rowsHtml) return;  // skip period with no branch data
+
+    const totalAov  = periodTotalOrders ? Math.round(periodTotalNet / periodTotalOrders) : 0;
+    const totalArpu = periodTotalCust   ? Math.round(periodTotalNet / periodTotalCust)   : 0;
 
     html += `
       <div style="margin-top:18px;">
-        <h4 style="font-size:14px;font-weight:600;margin:0 0 6px;display:flex;align-items:center;gap:8px;">
-          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${b.color};"></span>
-          ${shortName}
+        <h4 style="font-size:14px;font-weight:600;margin:0 0 6px;color:var(--text);">
+          ${periodLabel(pk)}
         </h4>
         <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;">
           <table class="ktv-table" style="width:100%;margin:0;">
             <thead>
               <tr>
-                <th>${periodColLabel}</th>
+                <th>Cơ sở</th>
                 <th style="text-align:right;">Khách hàng</th>
                 <th style="text-align:right;">Số đơn</th>
                 <th style="text-align:right;">Doanh thu thuần (đ)</th>
@@ -2346,10 +2342,10 @@ function renderBranchMetrics() {
             <tbody>
               ${rowsHtml}
               <tr style="background:var(--surface-2);font-weight:600;border-top:2px solid var(--border);">
-                <td><strong>Tổng</strong></td>
-                <td style="text-align:right;">${fmtNum(branchTotalCust)}</td>
-                <td style="text-align:right;">${fmtNum(branchTotalOrders)}</td>
-                <td style="text-align:right;">${fmtNum(branchTotalNet)}</td>
+                <td><strong>Tổng toàn hệ thống</strong></td>
+                <td style="text-align:right;">${fmtNum(periodTotalCust)}</td>
+                <td style="text-align:right;">${fmtNum(periodTotalOrders)}</td>
+                <td style="text-align:right;">${fmtNum(periodTotalNet)}</td>
                 <td style="text-align:right;color:var(--text-muted);">${fmtNum(totalAov)}</td>
                 <td style="text-align:right;color:var(--text-muted);">${fmtNum(totalArpu)}</td>
               </tr>
@@ -2358,72 +2354,6 @@ function renderBranchMetrics() {
         </div>
       </div>`;
   });
-
-  // System-wide section: aggregate all 3 spa branches per period
-  const systemByPeriod = new Map();
-  spaBranches.forEach(b => {
-    byBranchPeriod[b.id].forEach((p, pk) => {
-      if (!systemByPeriod.has(pk)) systemByPeriod.set(pk, { customers: 0, orders: 0, net: 0 });
-      const s = systemByPeriod.get(pk);
-      s.customers += p.customers; s.orders += p.orders; s.net += p.net;
-    });
-  });
-  const systemPeriods = periodList.filter(pk => {
-    const p = systemByPeriod.get(pk);
-    return p && (p.customers || p.orders || p.net);
-  });
-  if (systemPeriods.length > 0) {
-    let sysTotalCust = 0, sysTotalOrders = 0, sysTotalNet = 0;
-    const sysRows = systemPeriods.map(pk => {
-      const p = systemByPeriod.get(pk);
-      sysTotalCust += p.customers; sysTotalOrders += p.orders; sysTotalNet += p.net;
-      const aov  = p.orders    ? Math.round(p.net / p.orders)    : 0;
-      const arpu = p.customers ? Math.round(p.net / p.customers) : 0;
-      return `
-        <tr>
-          <td>${periodLabel(pk)}</td>
-          <td style="text-align:right;">${fmtNum(p.customers)}</td>
-          <td style="text-align:right;">${fmtNum(p.orders)}</td>
-          <td style="text-align:right;font-weight:600;">${fmtNum(p.net)}</td>
-          <td style="text-align:right;color:var(--text-muted);">${fmtNum(aov)}</td>
-          <td style="text-align:right;color:var(--text-muted);">${fmtNum(arpu)}</td>
-        </tr>`;
-    }).join('');
-    const sysAov  = sysTotalOrders ? Math.round(sysTotalNet / sysTotalOrders) : 0;
-    const sysArpu = sysTotalCust   ? Math.round(sysTotalNet / sysTotalCust)   : 0;
-
-    html += `
-      <div style="margin-top:22px;padding-top:18px;border-top:2px dashed var(--border);">
-        <h4 style="font-size:14px;font-weight:700;margin:0 0 6px;display:flex;align-items:center;gap:8px;">
-          🏢 Toàn hệ thống 3AM
-        </h4>
-        <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;">
-          <table class="ktv-table" style="width:100%;margin:0;">
-            <thead>
-              <tr>
-                <th>${periodColLabel}</th>
-                <th style="text-align:right;">Khách hàng</th>
-                <th style="text-align:right;">Số đơn</th>
-                <th style="text-align:right;">Doanh thu thuần (đ)</th>
-                <th style="text-align:right;">AOV (đ)</th>
-                <th style="text-align:right;">ARPU (đ)</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${sysRows}
-              <tr style="background:var(--surface-2);font-weight:700;border-top:2px solid var(--border);">
-                <td><strong>Tổng</strong></td>
-                <td style="text-align:right;">${fmtNum(sysTotalCust)}</td>
-                <td style="text-align:right;">${fmtNum(sysTotalOrders)}</td>
-                <td style="text-align:right;">${fmtNum(sysTotalNet)}</td>
-                <td style="text-align:right;color:var(--text-muted);">${fmtNum(sysAov)}</td>
-                <td style="text-align:right;color:var(--text-muted);">${fmtNum(sysArpu)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>`;
-  }
 
   html += `
     <p style="font-size:11px;color:var(--text-muted);margin-top:14px;line-height:1.5;">
