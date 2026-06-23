@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.10" />
+<meta name="version" content="v2026.06.22.11" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 ktv-stats-responsive -->
+<!-- BUILD: 2026-06-22 ktv-redesign -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -548,26 +548,13 @@
         <!-- Stats summary cards -->
         <section class="pnl-summary-grid" id="ktvSummary"></section>
 
-        <!-- Sessions over time chart with period toggle -->
-        <section class="card" id="ktvTimeSeriesCard" style="display:none;">
-          <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-            <div>
-              <h3>📈 Số ca dịch vụ theo thời gian</h3>
-              <p style="font-size:12px;color:var(--text-muted);margin-top:2px;" id="ktvTimeSeriesSubtitle">Tổng số ca theo từng tháng</p>
-            </div>
-            <div class="metric-toggle-bar" id="ktvPeriodToggle" style="display:inline-flex;background:var(--surface-2);border-radius:8px;padding:3px;">
-              <div class="metric-toggle on" data-period="month" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tháng</div>
-              <div class="metric-toggle" data-period="week" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tuần</div>
-              <div class="metric-toggle" data-period="day" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Ngày</div>
-            </div>
+        <!-- Tỷ trọng KTV (pie chart of session share per KTV) -->
+        <section class="card" id="ktvShareCard" style="display:none;">
+          <div class="card-head">
+            <h3>🥧 Tỷ trọng KTV theo số ca</h3>
+            <p style="font-size:12px;color:var(--text-muted);">Phần trăm số ca dịch vụ của từng KTV trong khoảng đã chọn</p>
           </div>
-          <div class="card-body" style="padding:16px;"><canvas id="ktvSessionsChart" height="200"></canvas></div>
-        </section>
-
-        <!-- Top KTV by sessions -->
-        <section class="card" id="ktvTopChartCard" style="display:none;">
-          <div class="card-head"><h3>🏆 Top KTV theo số ca</h3><p style="font-size:12px;color:var(--text-muted);">10 KTV có nhiều ca nhất trong khoảng đã chọn</p></div>
-          <div class="card-body" style="padding:16px;"><canvas id="ktvSalaryChart" height="200"></canvas></div>
+          <div class="card-body" style="padding:16px;"><canvas id="ktvShareChart" height="240"></canvas></div>
         </section>
 
         <!-- Active KTV table -->
@@ -4019,12 +4006,11 @@ saveData = function(data) {
    KTV VIEW (Hiệu suất nhân viên)
 ========================================================== */
 let ktvActiveBranch = 'cau-giay';
-let ktvSessionsChart = null, ktvSalaryChart = null;
+let ktvShareChart = null;
 
 function renderKtvView() {
   // Ensure storage
   if (!Array.isArray(DATA.ktvSessions)) DATA.ktvSessions = [];
-  if (!DATA.ktvPeriodToggle) DATA.ktvPeriodToggle = 'month';  // for time series chart
 
   const sessions = DATA.ktvSessions;
 
@@ -4055,16 +4041,14 @@ function renderKtvView() {
   if (sessionsForBranch.length === 0) {
     emptyEl.style.display = 'block';
     document.getElementById('ktvSummary').innerHTML = '';
-    document.getElementById('ktvTimeSeriesCard').style.display = 'none';
-    document.getElementById('ktvTopChartCard').style.display = 'none';
+    document.getElementById('ktvShareCard').style.display = 'none';
     document.getElementById('ktvActiveCard').style.display = 'none';
     document.getElementById('ktvResignedCard').style.display = 'none';
     document.getElementById('ktvDateInfo').textContent = '';
     return;
   }
   emptyEl.style.display = 'none';
-  document.getElementById('ktvTimeSeriesCard').style.display = '';
-  document.getElementById('ktvTopChartCard').style.display = '';
+  document.getElementById('ktvShareCard').style.display = '';
   document.getElementById('ktvActiveCard').style.display = '';
 
   // Apply date range filter (same global dateRange used elsewhere)
@@ -4114,154 +4098,82 @@ function renderKtvView() {
     if (s.date > e.lastDate) e.lastDate = s.date;
   });
 
-  // Stats cards
+  // ===== Stats cards =====
+  // Per user spec: Tổng ca · Số KTV · TB KH / KTV · TB đơn / KTV
+  // "Số KTV" = all KTVs that appeared in the filtered period (not just active)
+  // "TB KH / KTV" = mean of (unique customers per KTV) across KTVs in period
+  // "TB đơn / KTV" = total sessions / KTV count in period
   const totalSessions = filtered.length;
-  const activeCount = activeEmps.size;
-  const uniqueCustomers = new Set(filtered.map(s => s.phone || s.customer).filter(Boolean)).size;
-  const daysInRange = new Set(filtered.map(s => s.date)).size;
-  const weeksInRange = new Set(filtered.map(s => toISO(mondayOfDate(new Date(s.date))))).size;
-  const monthsInRange = new Set(filtered.map(s => s.date.substring(0, 7))).size;
-  const avgPerDay  = daysInRange   ? (totalSessions / daysInRange).toFixed(1)  : '0';
-  const avgPerWeek = weeksInRange  ? (totalSessions / weeksInRange).toFixed(0) : '0';
-  const avgPerMonth= monthsInRange ? (totalSessions / monthsInRange).toFixed(0): '0';
-
-  // The 4th stat card (and the time-series chart) follow the period toggle
-  const period = DATA.ktvPeriodToggle || 'month';
-  let avgLabel, avgValue;
-  if (period === 'month')      { avgLabel = 'Trung bình / tháng'; avgValue = fmtNum(avgPerMonth); }
-  else if (period === 'week')  { avgLabel = 'Trung bình / tuần';  avgValue = fmtNum(avgPerWeek); }
-  else                         { avgLabel = 'Trung bình / ngày';  avgValue = avgPerDay; }
+  const empsInPeriod = Object.keys(empStats);
+  const ktvCount = empsInPeriod.length;
+  const ordersPerKtv   = ktvCount ? (totalSessions / ktvCount).toFixed(0) : '0';
+  const customersPerKtv = ktvCount
+    ? (empsInPeriod.reduce((sum, n) => sum + empStats[n].customers.size, 0) / ktvCount).toFixed(0)
+    : '0';
 
   document.getElementById('ktvSummary').innerHTML = `
-    <div class="pnl-summary-card"><div class="label">Tổng số ca</div><div class="value">${fmtNum(totalSessions)}</div></div>
-    <div class="pnl-summary-card"><div class="label">KTV đang làm</div><div class="value">${activeCount}</div><div class="hint">${resignedEmps.size} đã nghỉ</div></div>
-    <div class="pnl-summary-card"><div class="label">KH unique</div><div class="value">${fmtNum(uniqueCustomers)}</div></div>
-    <div class="pnl-summary-card"><div class="label">${avgLabel}</div><div class="value">${avgValue}</div></div>
+    <div class="pnl-summary-card"><div class="label">Tổng ca</div><div class="value">${fmtNum(totalSessions)}</div></div>
+    <div class="pnl-summary-card"><div class="label">Số KTV</div><div class="value">${ktvCount}</div><div class="hint">${resignedEmps.size} đã nghỉ</div></div>
+    <div class="pnl-summary-card"><div class="label">TB Khách hàng / KTV</div><div class="value">${fmtNum(customersPerKtv)}</div></div>
+    <div class="pnl-summary-card"><div class="label">TB Đơn / KTV</div><div class="value">${fmtNum(ordersPerKtv)}</div></div>
   `;
 
-  // === Time series chart (sessions over time) — uses same `period` toggle ===
-  const subtitleMap = { month: 'Tổng số ca theo từng tháng', week: 'Tổng số ca theo từng tuần (Mon-Sun)', day: 'Tổng số ca theo từng ngày' };
-  document.getElementById('ktvTimeSeriesSubtitle').textContent = subtitleMap[period];
-  document.querySelectorAll('#ktvPeriodToggle .metric-toggle').forEach(el => {
-    el.classList.toggle('on', el.dataset.period === period);
-    el.style.background = el.dataset.period === period ? 'var(--bg)' : 'transparent';
-    el.style.color = el.dataset.period === period ? 'var(--accent)' : 'var(--text-muted)';
-    el.onclick = () => { DATA.ktvPeriodToggle = el.dataset.period; renderKtvView(); };
-  });
-
-  // Build period buckets
-  const bucketMap = new Map();
-  filtered.forEach(s => {
-    let key;
-    if (period === 'month') key = s.date.substring(0, 7);
-    else if (period === 'week') key = toISO(mondayOfDate(new Date(s.date)));
-    else key = s.date;
-    bucketMap.set(key, (bucketMap.get(key) || 0) + 1);
-  });
-  // Fill gaps so chart is continuous
-  const sortedKeys = [...bucketMap.keys()].sort();
-  const allKeys = [];
-  if (sortedKeys.length > 0) {
-    const first = sortedKeys[0];
-    const last = sortedKeys[sortedKeys.length - 1];
-    if (period === 'month') {
-      let [y, m] = first.split('-').map(Number);
-      const [ly, lm] = last.split('-').map(Number);
-      while (y < ly || (y === ly && m <= lm)) {
-        allKeys.push(`${y}-${String(m).padStart(2,'0')}`);
-        m++; if (m > 12) { m = 1; y++; }
-      }
-    } else if (period === 'week') {
-      let cur = new Date(first);
-      const lastD = new Date(last);
-      while (cur <= lastD) {
-        allKeys.push(toISO(cur));
-        cur.setDate(cur.getDate() + 7);
-      }
-    } else {
-      let cur = new Date(first);
-      const lastD = new Date(last);
-      while (cur <= lastD) {
-        allKeys.push(toISO(cur));
-        cur.setDate(cur.getDate() + 1);
-      }
-    }
-  }
-  const tsLabels = allKeys.map(k => {
-    if (period === 'month') {
-      const [y, m] = k.split('-');
-      return `T${parseInt(m,10)}/${y.slice(2)}`;
-    }
-    if (period === 'week') {
-      const d = new Date(k);
-      return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
-    }
-    const d = new Date(k);
-    return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
-  });
-  const tsData = allKeys.map(k => bucketMap.get(k) || 0);
-
-  const tsCtx = document.getElementById('ktvSessionsChart').getContext('2d');
-  if (window.ktvSessionsChart && typeof window.ktvSessionsChart.destroy === 'function') {
-    window.ktvSessionsChart.destroy();
-  }
-  window.ktvSessionsChart = new Chart(tsCtx, {
-    type: 'bar',
-    data: {
-      labels: tsLabels,
-      datasets: [{
-        label: 'Số ca',
-        data: tsData,
-        backgroundColor: 'rgba(99, 102, 241, 0.8)',
-        borderColor: 'rgba(99, 102, 241, 1)',
-        borderWidth: 0,
-        borderRadius: 4
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: (c) => `${fmtNum(c.parsed.y)} ca` } }
-      },
-      scales: {
-        x: { grid: { display: false } },
-        y: { beginAtZero: true, ticks: { callback: (v) => fmtNum(v) } }
-      }
-    }
-  });
-
-  // === Top 10 KTV by sessions chart ===
+  // ===== Pie chart: Tỷ trọng KTV theo số ca =====
   const empsList = Object.values(empStats).sort((a, b) => b.sessions - a.sessions);
-  const topEmps = empsList.slice(0, 10);
-  const topCtx = document.getElementById('ktvSalaryChart').getContext('2d');
-  if (window.ktvSalaryChart && typeof window.ktvSalaryChart.destroy === 'function') {
-    window.ktvSalaryChart.destroy();
+  // Show top 8 + "Khác" (rest aggregated) to keep pie readable
+  const TOP_N = 8;
+  const topForPie = empsList.slice(0, TOP_N);
+  const rest = empsList.slice(TOP_N);
+  const pieLabels = topForPie.map(e => e.name);
+  const pieData   = topForPie.map(e => e.sessions);
+  if (rest.length > 0) {
+    pieLabels.push(`Khác (${rest.length} KTV)`);
+    pieData.push(rest.reduce((sum, e) => sum + e.sessions, 0));
   }
-  window.ktvSalaryChart = new Chart(topCtx, {
-    type: 'bar',
-    data: {
-      labels: topEmps.map(e => e.name),
-      datasets: [{
-        label: 'Số ca',
-        data: topEmps.map(e => e.sessions),
-        backgroundColor: 'rgba(34, 197, 94, 0.8)',
-        borderRadius: 4
-      }]
-    },
-    options: {
-      indexAxis: 'y',
-      responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: (c) => `${fmtNum(c.parsed.x)} ca` } }
+  // Color palette — distinct colors for slices
+  const palette = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16','#94a3b8','#f97316'];
+  const sliceColors = pieLabels.map((_, i) => palette[i % palette.length]);
+
+  const pieCtx = document.getElementById('ktvShareChart').getContext('2d');
+  if (window.ktvShareChart && typeof window.ktvShareChart.destroy === 'function') {
+    window.ktvShareChart.destroy();
+  }
+  if (pieData.length === 0 || pieData.every(v => v === 0)) {
+    // Skip — empty chart, just blank the canvas
+    pieCtx.clearRect(0, 0, pieCtx.canvas.width, pieCtx.canvas.height);
+  } else {
+    window.ktvShareChart = new Chart(pieCtx, {
+      type: 'doughnut',
+      data: {
+        labels: pieLabels,
+        datasets: [{
+          data: pieData,
+          backgroundColor: sliceColors,
+          borderWidth: 2,
+          borderColor: '#fff'
+        }]
       },
-      scales: {
-        x: { beginAtZero: true, ticks: { callback: (v) => fmtNum(v) } },
-        y: { grid: { display: false } }
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: { boxWidth: 12, padding: 8, font: { size: 12 } }
+          },
+          tooltip: {
+            callbacks: {
+              label: (c) => {
+                const total = pieData.reduce((s, v) => s + v, 0);
+                const pct = total ? ((c.parsed / total) * 100).toFixed(1) : 0;
+                return `${c.label}: ${fmtNum(c.parsed)} ca (${pct}%)`;
+              }
+            }
+          }
+        },
+        cutout: '50%'
       }
-    }
-  });
+    });
+  }
 
   // === Active KTV table ===
   const activeEmpList = empsList.filter(e => activeEmps.has(e.name));
