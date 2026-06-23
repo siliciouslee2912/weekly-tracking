@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.05" />
+<meta name="version" content="v2026.06.22.06" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 ktv-sync-save -->
+<!-- BUILD: 2026-06-22 ktv-schema-v2 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -2607,31 +2607,62 @@ const FIRESTORE_KTV_LEGACY_DOC = (branchId) => `dashboard/ktv_${branchId}`;
 // ===== KTV session compression =====
 // Why: raw JSON of 9000 sessions = 1.4 MB > Firestore 1 MB limit. Compressed
 // form replaces repeated employee/service names with integer indices into
-// shared lookup arrays. Typical compression 65% (1.4MB → ~500KB per branch
-// per 5 months). Safe to split per (branch, year) so a single busy branch
-// can have decades of history without ever hitting the 1MB ceiling.
+// shared lookup arrays.
+// SCHEMA v2: parallel arrays (one per field) — same length, indexed together.
+// Can't use array-of-arrays because Firestore doesn't support nested arrays.
 function compressKtvSessions(sessions) {
   const emps = []; const empIdx = new Map();
   const svcs = []; const svcIdx = new Map();
-  const rows = [];
-  for (const s of sessions) {
-    if (!empIdx.has(s.name))    { empIdx.set(s.name, emps.length);    emps.push(s.name); }
-    if (!svcIdx.has(s.service)) { svcIdx.set(s.service, svcs.length); svcs.push(s.service); }
-    rows.push([empIdx.get(s.name), s.date, s.time, s.customer || '', s.phone || '', svcIdx.get(s.service)]);
+  const e = [];  // employee idx per row
+  const d = [];  // date per row
+  const t = [];  // time per row
+  const c = [];  // customer name per row
+  const p = [];  // phone per row
+  const s = [];  // service idx per row
+  for (const sess of sessions) {
+    if (!empIdx.has(sess.name))    { empIdx.set(sess.name, emps.length);    emps.push(sess.name); }
+    if (!svcIdx.has(sess.service)) { svcIdx.set(sess.service, svcs.length); svcs.push(sess.service); }
+    e.push(empIdx.get(sess.name));
+    d.push(sess.date || '');
+    t.push(sess.time || '');
+    c.push(sess.customer || '');
+    p.push(sess.phone || '');
+    s.push(svcIdx.get(sess.service));
   }
-  return { v: 1, emps, svcs, rows };
+  return { v: 2, emps, svcs, e, d, t, c, p, s };
 }
 function decompressKtvSessions(compressed, branchId) {
-  if (!compressed || !Array.isArray(compressed.rows)) return [];
-  return compressed.rows.map(r => ({
-    branchId,
-    name:     compressed.emps[r[0]] || '',
-    date:     r[1] || '',
-    time:     r[2] || '',
-    customer: r[3] || '',
-    phone:    r[4] || '',
-    service:  compressed.svcs[r[5]] || ''
-  }));
+  if (!compressed) return [];
+  // v2: parallel arrays
+  if (compressed.v === 2 && Array.isArray(compressed.e)) {
+    const n = compressed.e.length;
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) {
+      out[i] = {
+        branchId,
+        name:     compressed.emps[compressed.e[i]] || '',
+        date:     compressed.d[i] || '',
+        time:     compressed.t[i] || '',
+        customer: compressed.c[i] || '',
+        phone:    compressed.p[i] || '',
+        service:  compressed.svcs[compressed.s[i]] || ''
+      };
+    }
+    return out;
+  }
+  // v1 legacy (array-of-arrays — only present in localStorage from earlier saves):
+  if (Array.isArray(compressed.rows)) {
+    return compressed.rows.map(r => ({
+      branchId,
+      name:     compressed.emps[r[0]] || '',
+      date:     r[1] || '',
+      time:     r[2] || '',
+      customer: r[3] || '',
+      phone:    r[4] || '',
+      service:  compressed.svcs[r[5]] || ''
+    }));
+  }
+  return [];
 }
 
 // Parse a KTV doc ID into {branchId, year}. Supports both new format
