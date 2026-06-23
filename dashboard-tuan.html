@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.03" />
+<meta name="version" content="v2026.06.22.04" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 ktv-shard-year -->
+<!-- BUILD: 2026-06-22 ktv-diag -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -2655,11 +2655,14 @@ async function loadFromFirestore() {
     updateSyncIndicator('syncing', 'Đang tải…');
     // Single query: fetch the entire 'dashboard' collection (main + all ktv_* docs)
     const colSnap = await _firestoreDb.collection('dashboard').get();
+    console.log(`[Firestore load] Found ${colSnap.size} docs in dashboard collection`);
 
     let mainPayload = null;
     const ktvByBranch = {};  // branchId → { fromNewDocs: [], fromLegacy: [] }
+    const docInventory = [];
 
     colSnap.forEach(doc => {
+      docInventory.push(doc.id);
       if (doc.id === 'main') {
         mainPayload = doc.data().payload || {};
         return;
@@ -2674,6 +2677,7 @@ async function loadFromFirestore() {
         ktvByBranch[parsed.branchId].fromLegacy.push(...decompressed);
       }
     });
+    console.log(`[Firestore load] Docs: ${docInventory.join(', ')}`);
 
     if (!mainPayload) {
       updateSyncIndicator('online', 'Chưa có dữ liệu');
@@ -2681,30 +2685,68 @@ async function loadFromFirestore() {
     }
 
     // For each branch: prefer new per-year docs over legacy doc.
-    // If branch has any new doc, use those exclusively (legacy will be cleaned on next save).
     const allKtvSessions = [];
-    Object.values(ktvByBranch).forEach(({ fromNewDocs, fromLegacy }) => {
+    Object.entries(ktvByBranch).forEach(([branchId, { fromNewDocs, fromLegacy }]) => {
       if (fromNewDocs.length > 0) {
+        console.log(`[Firestore load] ${branchId}: ${fromNewDocs.length} sessions from new (per-year) docs`);
         allKtvSessions.push(...fromNewDocs);
-      } else {
+      } else if (fromLegacy.length > 0) {
+        console.log(`[Firestore load] ${branchId}: ${fromLegacy.length} sessions from LEGACY doc (will migrate on next save)`);
         allKtvSessions.push(...fromLegacy);
       }
     });
 
     if (allKtvSessions.length > 0) {
       mainPayload.ktvSessions = allKtvSessions;
+      console.log(`[Firestore load] Total KTV sessions loaded: ${allKtvSessions.length}`);
     } else if (!Array.isArray(mainPayload.ktvSessions)) {
       mainPayload.ktvSessions = [];
+      console.log('[Firestore load] No KTV sessions found in any doc');
     }
 
     updateSyncIndicator('online', 'Đã đồng bộ');
     return mainPayload;
   } catch (e) {
-    console.error('Firestore load failed:', e);
+    console.error('[Firestore load] FAILED:', e.code || '', e.message || e);
     updateSyncIndicator('offline', 'Offline');
     return null;
   }
 }
+
+// Diagnostic helper — gõ window.diagKtv() trong Console
+window.diagKtv = async function() {
+  console.log('=== KTV DIAGNOSTIC ===');
+  console.log('1. localStorage KTV sessions:', (JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}').ktvSessions || []).length);
+  console.log('2. DATA.ktvSessions in memory:', (DATA.ktvSessions || []).length);
+  console.log('3. Firestore ready:', _firebaseReady, '/ auth user:', !!(_firebaseAuth && _firebaseAuth.currentUser));
+  if (_firestoreDb && _firebaseAuth && _firebaseAuth.currentUser) {
+    console.log('4. Fetching dashboard collection...');
+    try {
+      const snap = await _firestoreDb.collection('dashboard').get();
+      const docs = [];
+      snap.forEach(d => {
+        const size = JSON.stringify(d.data()).length;
+        docs.push({ id: d.id, sizeKB: (size/1024).toFixed(1) });
+      });
+      console.table(docs);
+    } catch (e) {
+      console.error('Fetch error:', e.code, e.message);
+    }
+    console.log('5. Test write to dashboard/ktv_test_diag...');
+    try {
+      await _firestoreDb.doc('dashboard/ktv_test_diag').set({ test: 1, _ts: Date.now() });
+      console.log('   ✓ Write succeeded — security rules allow ktv_* docs');
+      await _firestoreDb.doc('dashboard/ktv_test_diag').delete();
+    } catch (e) {
+      console.error('   ✗ Write FAILED:', e.code, e.message);
+      console.error('   → Có thể Firestore security rules đang chặn ktv_* docs!');
+      console.error('   → Vào Firebase Console → Firestore → Rules, đổi thành:');
+      console.error('     match /dashboard/{docId} { allow read, write: if request.auth != null; }');
+    }
+  } else {
+    console.log('Cannot test Firestore (auth/db not ready)');
+  }
+};
 
 let _saveTimer = null;
 // Track which branches have pending KTV changes so we only re-save what changed.
@@ -2714,13 +2756,21 @@ async function saveKtvBranchYearToFirestore(branchId, year, sessions) {
   if (!_firestoreDb) return false;
   try {
     const compressed = compressKtvSessions(sessions);
-    await _firestoreDb.doc(FIRESTORE_KTV_DOC(branchId, year)).set({
+    const docPath = FIRESTORE_KTV_DOC(branchId, year);
+    const jsonSize = JSON.stringify(compressed).length;
+    console.log(`[KTV save] ${docPath}: ${sessions.length} sessions, ${(jsonSize/1024).toFixed(1)} KB compressed`);
+    await _firestoreDb.doc(docPath).set({
       ...compressed,
       _updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+    console.log(`[KTV save] ✓ ${docPath} saved successfully`);
     return true;
   } catch (e) {
-    console.error(`KTV save failed for ${branchId}_${year}:`, e);
+    console.error(`[KTV save] ✗ FAILED for ${branchId}_${year}:`, e.code || '', e.message || e);
+    // Show user-visible toast so they know save failed
+    if (typeof showToast === 'function') {
+      showToast(`Lỗi lưu KTV ${branchId} ${year}: ${e.code || e.message || 'unknown'}`);
+    }
     return false;
   }
 }
@@ -2740,7 +2790,11 @@ async function saveAllDirtyKtvBranches(data) {
   if (!_firestoreDb || !Array.isArray(data.ktvSessions)) return;
   const dirty = [..._ktvDirtyBranches];
   _ktvDirtyBranches.clear();
-  if (dirty.length === 0) return;
+  if (dirty.length === 0) {
+    console.log('[KTV save] No dirty branches, skipping');
+    return;
+  }
+  console.log(`[KTV save] Saving ${dirty.length} dirty branches: ${dirty.join(', ')}`);
 
   // Group sessions by (branchId, year)
   const byBranchYear = {};
@@ -2752,6 +2806,7 @@ async function saveAllDirtyKtvBranches(data) {
     if (!byBranchYear[key]) byBranchYear[key] = [];
     byBranchYear[key].push(s);
   }
+  console.log(`[KTV save] Total docs to write: ${Object.keys(byBranchYear).length}`);
 
   // Save each (branch, year) doc in parallel
   const saves = [];
@@ -2763,7 +2818,13 @@ async function saveAllDirtyKtvBranches(data) {
   for (const branchId of dirty) {
     saves.push(deleteLegacyKtvDoc(branchId));
   }
-  await Promise.all(saves);
+  const results = await Promise.all(saves);
+  const failed = results.filter(r => r === false).length;
+  if (failed > 0) {
+    console.error(`[KTV save] ${failed} of ${saves.length} operations FAILED`);
+  } else {
+    console.log(`[KTV save] ✓ All ${saves.length} operations succeeded`);
+  }
 }
 
 async function saveToFirestore(data) {
