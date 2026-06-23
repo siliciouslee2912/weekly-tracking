@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.04" />
+<meta name="version" content="v2026.06.22.05" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 ktv-diag -->
+<!-- BUILD: 2026-06-22 ktv-sync-save -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -3650,7 +3650,7 @@ function showKtvUploadPreview(filename, r) {
   document.getElementById('uploadConfirmBtn').onclick = () => confirmKtvUpload();
 }
 
-function confirmKtvUpload() {
+async function confirmKtvUpload() {
   const r = _currentParse;
   if (!r || r.fileType !== 'ktv') return;
 
@@ -3679,22 +3679,93 @@ function confirmKtvUpload() {
     }
   }
 
-  // Mark this branch's KTV sessions as needing Firestore save (must be BEFORE saveData
-  // so the debounced save picks up the dirty marker)
-  if (typeof _ktvDirtyBranches !== 'undefined') _ktvDirtyBranches.add(r.branchId);
-  saveData(DATA);
-  renderAll();
+  // Save localStorage immediately (sync) so data isn't lost even if browser closes
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch(e) { console.warn(e); }
 
+  // Show "saving to cloud" UI while we synchronously write to Firestore
   const branch = getBranch(r.branchId);
   const branchName = branch ? branch.name.replace("3AM D'SPA · ", "") : r.branchId;
   uploadBody.innerHTML = `
-    <div class="upload-success">
-      ✅ Đã lưu <strong>${fmtNum(added)} ca dịch vụ</strong> mới cho cơ sở <strong>${branchName}</strong> (đã xoá ${fmtNum(removed)} ca cũ trong cùng khoảng).
+    <p style="color:var(--text-muted);font-size:13px;">Đang lưu ${fmtNum(added)} ca lên cloud...</p>
+    <div style="margin:14px 0;padding:14px;background:var(--surface-2);border-radius:8px;text-align:center;">
+      <div class="loader" style="display:inline-block;width:24px;height:24px;border:3px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+      <div style="margin-top:8px;font-size:13px;color:var(--text-muted);">Vui lòng đợi… không F5 trang ngay.</div>
     </div>
-    <p style="color:var(--text-muted);font-size:13px;">Vào tab <strong>Hiệu suất KTV</strong> để xem dashboard chi tiết.</p>
-    <div class="upload-actions">
-      <button class="btn-confirm" onclick="document.getElementById('uploadModal').classList.remove('show');">Đóng</button>
-    </div>`;
+    <style>@keyframes spin { to { transform: rotate(360deg); } }</style>`;
+
+  renderAll();
+
+  // Force immediate (non-debounced) Firestore save for upload events.
+  // This blocks until save completes — user sees spinner + cannot F5 mid-save.
+  let saveSuccess = false;
+  let errorMsg = '';
+  if (_firebaseReady && _firebaseAuth && _firebaseAuth.currentUser && _firestoreDb) {
+    try {
+      // Cancel any pending debounced save (we'll do it now synchronously)
+      clearTimeout(_saveTimer);
+      // 1. Save main payload (without ktvSessions)
+      const mainPayload = { ...DATA };
+      delete mainPayload.ktvSessions;
+      await _firestoreDb.doc(FIRESTORE_DOC).set({
+        payload: mainPayload,
+        _updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      // 2. Save THIS branch's sessions (grouped by year) directly
+      const sessionsForBranch = DATA.ktvSessions.filter(s => s.branchId === r.branchId);
+      const byYear = {};
+      for (const s of sessionsForBranch) {
+        const year = (s.date || '').substring(0, 4);
+        if (!year) continue;
+        if (!byYear[year]) byYear[year] = [];
+        byYear[year].push(s);
+      }
+      const yearSaves = Object.entries(byYear).map(([year, sessions]) =>
+        saveKtvBranchYearToFirestore(r.branchId, year, sessions)
+      );
+      const results = await Promise.all(yearSaves);
+      const failed = results.filter(x => !x).length;
+      if (failed > 0) {
+        errorMsg = `${failed} doc(s) lưu thất bại`;
+      } else {
+        // 3. Clean up legacy doc
+        await deleteLegacyKtvDoc(r.branchId);
+        saveSuccess = true;
+        // Remove this branch from dirty set since we just synced it
+        if (_ktvDirtyBranches.has) _ktvDirtyBranches.delete(r.branchId);
+      }
+    } catch (e) {
+      console.error('[KTV upload save] FAILED:', e);
+      errorMsg = e.code || e.message || 'unknown error';
+    }
+  } else {
+    errorMsg = 'Firebase chưa sẵn sàng (chưa đăng nhập)';
+  }
+
+  if (saveSuccess) {
+    uploadBody.innerHTML = `
+      <div class="upload-success">
+        ✅ Đã lưu <strong>${fmtNum(added)} ca dịch vụ</strong> mới cho cơ sở <strong>${branchName}</strong> (xoá ${fmtNum(removed)} ca cũ trong cùng khoảng).
+      </div>
+      <p style="color:#22c55e;font-size:13px;font-weight:600;">☁️ Đã sync lên cloud — F5 sẽ giữ data.</p>
+      <p style="color:var(--text-muted);font-size:13px;">Vào tab <strong>Hiệu suất KTV</strong> để xem dashboard chi tiết.</p>
+      <div class="upload-actions">
+        <button class="btn-confirm" onclick="document.getElementById('uploadModal').classList.remove('show');">Đóng</button>
+      </div>`;
+  } else {
+    uploadBody.innerHTML = `
+      <div class="upload-warning">
+        ⚠️ Đã lưu local (${fmtNum(added)} ca) <strong>nhưng lỗi khi sync lên cloud</strong>:
+        <code style="display:block;background:var(--surface-2);padding:6px;margin-top:6px;border-radius:4px;font-size:11px;">${errorMsg}</code>
+      </div>
+      <p style="color:var(--text-muted);font-size:12px;line-height:1.5;">
+        Data vẫn an toàn trong browser này nhưng sẽ <strong>mất khi F5</strong> ở máy khác.<br>
+        Mở Console (F12) → gõ <code>diagKtv()</code> để xem chi tiết lỗi.
+      </p>
+      <div class="upload-actions">
+        <button class="btn-confirm" onclick="document.getElementById('uploadModal').classList.remove('show');">Đóng</button>
+      </div>`;
+  }
+
   _currentParse = null;
 }
 
