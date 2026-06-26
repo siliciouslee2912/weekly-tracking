@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.28" />
+<meta name="version" content="v2026.06.22.29" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 pagination-labels -->
+<!-- BUILD: 2026-06-22 scroll-restore -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -711,7 +711,7 @@ function paginationHtml(currentPage, totalPages, itemLabel) {
   html += '</div>';
 
   // Info line
-  html += `<div style="font-size:12px;color:var(--text-muted);">Trang ${currentPage} / ${totalPages} · Mỗi trang ${PAGE_SIZE} ${itemLabel}</div>`;
+  html += `<div style="font-size:12px;color:var(--text-muted);">Trang ${currentPage} / ${totalPages}</div>`;
 
   html += '</div>';
   return html;
@@ -3175,6 +3175,11 @@ async function loadDataAndRender() {
   loadStateFromHash(false);
 
   renderAll();
+
+  // After initial render, restore scroll position (for F5 refresh).
+  // Page heights stabilize after data loads + charts render, so we use
+  // a small delay before restoring.
+  restoreScrollPosition();
 }
 
 /* ==========================================================
@@ -4735,6 +4740,37 @@ renderAll = function() {
 
 // Bootstrap: kick off Firebase when DOM ready
 window.addEventListener('DOMContentLoaded', bootstrapApp);
+
+// === Scroll position preservation across F5 refresh ===
+// Save scrollY before page unloads (F5, close, navigate)
+window.addEventListener('beforeunload', () => {
+  try {
+    sessionStorage.setItem('_scrollY', String(window.scrollY));
+  } catch(e) {}
+});
+
+// Restore scroll position after bootstrap finishes. We use a delay because
+// rendering happens asynchronously after data load; if we restore immediately
+// the page hasn't grown tall enough yet and scroll snaps back to 0.
+function restoreScrollPosition() {
+  try {
+    const saved = sessionStorage.getItem('_scrollY');
+    if (!saved) return;
+    const targetY = parseInt(saved, 10);
+    if (isNaN(targetY) || targetY <= 0) return;
+    // Try multiple times in case rendering is still in progress
+    let attempts = 0;
+    const tryScroll = () => {
+      attempts++;
+      window.scrollTo({ top: targetY, behavior: 'instant' });
+      // If we couldn't scroll to target (page not tall enough yet), try again
+      if (attempts < 10 && Math.abs(window.scrollY - targetY) > 20) {
+        setTimeout(tryScroll, 200);
+      }
+    };
+    setTimeout(tryScroll, 100);
+  } catch(e) {}
+}
 
 
 /* ==========================================================
