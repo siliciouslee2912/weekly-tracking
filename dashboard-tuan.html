@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.15" />
+<meta name="version" content="v2026.06.22.16" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 pie-title -->
+<!-- BUILD: 2026-06-22 toggle-week-month-year-total -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -558,12 +558,12 @@
           <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
             <div>
               <h3>Bảng xếp hạng KTV đang làm</h3>
-              <p style="font-size:12px;color:var(--text-muted);">KTV >4 tuần không có ca sẽ chuyển sang mục "Đã nghỉ" bên dưới.</p>
             </div>
             <div class="metric-toggle-bar" id="ktvTableViewToggle" style="display:inline-flex;background:var(--surface-2);border-radius:8px;padding:3px;">
+              <div class="metric-toggle" data-view="week" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tuần</div>
+              <div class="metric-toggle" data-view="month" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tháng</div>
+              <div class="metric-toggle" data-view="year" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Năm</div>
               <div class="metric-toggle on" data-view="total" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tổng</div>
-              <div class="metric-toggle" data-view="month" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Theo tháng</div>
-              <div class="metric-toggle" data-view="week" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Theo tuần</div>
             </div>
           </div>
           <div class="card-body" id="ktvTableArea" style="padding:6px 16px 16px;overflow-x:auto;">
@@ -575,7 +575,6 @@
         <section class="card" id="ktvResignedCard" style="display:none;">
           <div class="card-head" style="cursor:pointer;" onclick="document.getElementById('ktvResignedBody').classList.toggle('show'); this.querySelector('.toggle-arrow').textContent = document.getElementById('ktvResignedBody').classList.contains('show') ? '▼' : '▶';">
             <h3>💼 Nhân sự đã nghỉ <span class="toggle-arrow" style="font-size:12px;color:var(--text-muted);margin-left:6px;">▶</span></h3>
-            <p style="font-size:12px;color:var(--text-muted);">KTV trên 4 tuần không có ca trong dữ liệu. Click để xem.</p>
           </div>
           <div class="card-body" id="ktvResignedBody" style="padding:6px 16px 16px;overflow-x:auto;display:none;">
             <table class="ktv-table" id="ktvResignedTable"></table>
@@ -4229,10 +4228,15 @@ function renderKtvView() {
     } else {
       // Per-period: group filtered sessions by period for ACTIVE employees only,
       // then render one table per period (newest first).
-      const isMonth = tableView === 'month';
-      const periodKeyOf = (s) => isMonth ? s.date.substring(0, 7) : toISO(mondayOfDate(new Date(s.date)));
+      // tableView is one of: 'week' | 'month' | 'year'
+      const periodKeyOf = (s) => {
+        if (tableView === 'year')  return s.date.substring(0, 4);          // 'YYYY'
+        if (tableView === 'month') return s.date.substring(0, 7);          // 'YYYY-MM'
+        return toISO(mondayOfDate(new Date(s.date)));                       // Monday of week
+      };
       const periodLabel = (key) => {
-        if (isMonth) {
+        if (tableView === 'year')  return `Năm ${key}`;
+        if (tableView === 'month') {
           const [y, m] = key.split('-');
           return `Tháng ${parseInt(m,10)}/${y}`;
         }
