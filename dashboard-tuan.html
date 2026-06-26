@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.17" />
+<meta name="version" content="v2026.06.22.18" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 fix-staff-nav-active -->
+<!-- BUILD: 2026-06-22 pie-follow-toggle -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -550,7 +550,9 @@
           <div class="card-head">
             <h3>Tỷ trọng KTV làm dịch vụ</h3>
           </div>
-          <div class="card-body" style="padding:16px;"><canvas id="ktvShareChart" height="240"></canvas></div>
+          <div class="card-body" id="ktvShareArea" style="padding:16px;">
+            <!-- single canvas (Tổng) or grid of small pies (per period) rendered here -->
+          </div>
         </section>
 
         <!-- Active KTV table -->
@@ -4099,62 +4101,137 @@ function renderKtvView() {
     if (s.date > e.lastDate) e.lastDate = s.date;
   });
 
-  // ===== Pie chart: Tỷ trọng KTV theo số ca =====
-  const empsList = Object.values(empStats).sort((a, b) => b.sessions - a.sessions);
-  // Show top 8 + "Khác" (rest aggregated) to keep pie readable
-  const TOP_N = 8;
-  const topForPie = empsList.slice(0, TOP_N);
-  const rest = empsList.slice(TOP_N);
-  const pieLabels = topForPie.map(e => e.name);
-  const pieData   = topForPie.map(e => e.sessions);
-  if (rest.length > 0) {
-    pieLabels.push(`Khác (${rest.length} KTV)`);
-    pieData.push(rest.reduce((sum, e) => sum + e.sessions, 0));
-  }
-  // Color palette — distinct colors for slices
-  const palette = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16','#94a3b8','#f97316'];
-  const sliceColors = pieLabels.map((_, i) => palette[i % palette.length]);
+  // ===== Pie chart(s): Tỷ trọng KTV làm dịch vụ =====
+  // Uses same DATA.ktvTableView as the table below — when user picks Tuần/Tháng/Năm,
+  // the chart area shows multiple small pies (one per period). When 'Tổng', shows
+  // a single large doughnut for the full filtered range.
+  const shareArea = document.getElementById('ktvShareArea');
+  const PALETTE = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16','#94a3b8','#f97316'];
 
-  const pieCtx = document.getElementById('ktvShareChart').getContext('2d');
+  // Destroy any prior chart instances
   if (window.ktvShareChart && typeof window.ktvShareChart.destroy === 'function') {
-    window.ktvShareChart.destroy();
+    window.ktvShareChart.destroy(); window.ktvShareChart = null;
   }
-  if (pieData.length === 0 || pieData.every(v => v === 0)) {
-    // Skip — empty chart, just blank the canvas
-    pieCtx.clearRect(0, 0, pieCtx.canvas.width, pieCtx.canvas.height);
-  } else {
-    window.ktvShareChart = new Chart(pieCtx, {
+  if (Array.isArray(window.ktvShareCharts)) {
+    window.ktvShareCharts.forEach(c => c && c.destroy && c.destroy());
+  }
+  window.ktvShareCharts = [];
+
+  // Read view state (default 'total')
+  const _view = DATA.ktvTableView || 'total';
+
+  // Helper: build pie data {labels, data, colors} from an empStats-like dict
+  function buildPieData(stats) {
+    const list = Object.values(stats).sort((a, b) => b.sessions - a.sessions);
+    const TOP_N = 8;
+    const top = list.slice(0, TOP_N);
+    const rest = list.slice(TOP_N);
+    const labels = top.map(e => e.name);
+    const data = top.map(e => e.sessions);
+    if (rest.length > 0) {
+      labels.push(`Khác (${rest.length} KTV)`);
+      data.push(rest.reduce((sum, e) => sum + e.sessions, 0));
+    }
+    const colors = labels.map((_, i) => PALETTE[i % PALETTE.length]);
+    return { labels, data, colors };
+  }
+
+  // Helper: create a Chart on a canvas with given data
+  function makeDoughnut(canvas, pie, opts = {}) {
+    const total = pie.data.reduce((s, v) => s + v, 0);
+    if (!total) return null;
+    return new Chart(canvas.getContext('2d'), {
       type: 'doughnut',
       data: {
-        labels: pieLabels,
-        datasets: [{
-          data: pieData,
-          backgroundColor: sliceColors,
-          borderWidth: 2,
-          borderColor: '#fff'
-        }]
+        labels: pie.labels,
+        datasets: [{ data: pie.data, backgroundColor: pie.colors, borderWidth: 2, borderColor: '#fff' }]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: {
+            display: opts.showLegend !== false,
             position: 'right',
-            labels: { boxWidth: 12, padding: 8, font: { size: 12 } }
+            labels: { boxWidth: 10, padding: 6, font: { size: opts.fontSize || 11 } }
           },
           tooltip: {
             callbacks: {
               label: (c) => {
-                const total = pieData.reduce((s, v) => s + v, 0);
                 const pct = total ? ((c.parsed / total) * 100).toFixed(1) : 0;
                 return `${c.label}: ${fmtNum(c.parsed)} ca (${pct}%)`;
               }
             }
           }
         },
-        cutout: '50%'
+        cutout: '55%'
       }
     });
   }
+
+  if (_view === 'total') {
+    // Single large pie for full filtered range
+    shareArea.innerHTML = '<div style="height:240px;"><canvas id="ktvShareChart"></canvas></div>';
+    const pie = buildPieData(empStats);
+    if (pie.data.length > 0) {
+      window.ktvShareChart = makeDoughnut(document.getElementById('ktvShareChart'), pie, { fontSize: 12 });
+    }
+  } else {
+    // Per-period: multiple small pies in a responsive grid
+    const periodKeyOf = (s) => {
+      if (_view === 'year')  return s.date.substring(0, 4);
+      if (_view === 'month') return s.date.substring(0, 7);
+      return toISO(mondayOfDate(new Date(s.date)));  // Monday of week
+    };
+    const periodLabel = (key) => {
+      if (_view === 'year')  return `Năm ${key}`;
+      if (_view === 'month') {
+        const [y, m] = key.split('-');
+        return `Tháng ${parseInt(m,10)}/${y}`;
+      }
+      const start = new Date(key);
+      const end = new Date(start); end.setDate(end.getDate() + 6);
+      const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
+      return `${fmt(start)} - ${fmt(end)} (${start.getFullYear()})`;
+    };
+
+    // Bucket sessions by period (across ALL employees in filtered range, not just active —
+    // pie shows full picture for that period)
+    const byPeriodStats = new Map();
+    const allPeriods = new Set();
+    filtered.forEach(s => {
+      const pk = periodKeyOf(s);
+      allPeriods.add(pk);
+      if (!byPeriodStats.has(pk)) byPeriodStats.set(pk, {});
+      const stats = byPeriodStats.get(pk);
+      if (!stats[s.name]) stats[s.name] = { name: s.name, sessions: 0 };
+      stats[s.name].sessions++;
+    });
+
+    const sortedPeriods = [...allPeriods].sort((a, b) => b.localeCompare(a));
+    if (sortedPeriods.length === 0) {
+      shareArea.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:30px;">Không có dữ liệu trong khoảng đã chọn</div>';
+    } else {
+      // Build HTML grid
+      const cardsHtml = sortedPeriods.map((pk, idx) => `
+        <div style="flex:1 1 320px;min-width:280px;max-width:520px;border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface);">
+          <div style="font-size:13px;font-weight:600;margin-bottom:6px;color:var(--text);">${periodLabel(pk)}</div>
+          <div style="height:200px;"><canvas id="ktvShareChart_${idx}"></canvas></div>
+        </div>
+      `).join('');
+      shareArea.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:14px;">${cardsHtml}</div>`;
+
+      // Create charts after DOM update
+      sortedPeriods.forEach((pk, idx) => {
+        const pie = buildPieData(byPeriodStats.get(pk));
+        const canvas = document.getElementById(`ktvShareChart_${idx}`);
+        if (canvas && pie.data.length > 0) {
+          const chart = makeDoughnut(canvas, pie, { fontSize: 10 });
+          if (chart) window.ktvShareCharts.push(chart);
+        }
+      });
+    }
+  }
+
 
   // === Active KTV table — with view toggle (Tổng / Theo tháng / Theo tuần) ===
   if (!DATA.ktvTableView) DATA.ktvTableView = 'total';
@@ -4169,6 +4246,7 @@ function renderKtvView() {
   });
 
   const tableArea = document.getElementById('ktvTableArea');
+  const empsList = Object.values(empStats).sort((a, b) => b.sessions - a.sessions);
   const activeEmpList = empsList.filter(e => activeEmps.has(e.name));
 
   if (activeEmpList.length === 0) {
