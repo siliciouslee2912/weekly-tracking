@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.18" />
+<meta name="version" content="v2026.06.22.19" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 pie-follow-toggle -->
+<!-- BUILD: 2026-06-22 pie-click-period -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -4176,7 +4176,8 @@ function renderKtvView() {
       window.ktvShareChart = makeDoughnut(document.getElementById('ktvShareChart'), pie, { fontSize: 12 });
     }
   } else {
-    // Per-period: multiple small pies in a responsive grid
+    // Per-period: single pie showing data for ONE selected period.
+    // User selects by clicking a period section in the table below.
     const periodKeyOf = (s) => {
       if (_view === 'year')  return s.date.substring(0, 4);
       if (_view === 'month') return s.date.substring(0, 7);
@@ -4191,11 +4192,11 @@ function renderKtvView() {
       const start = new Date(key);
       const end = new Date(start); end.setDate(end.getDate() + 6);
       const fmt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
-      return `${fmt(start)} - ${fmt(end)} (${start.getFullYear()})`;
+      return `Tuần ${fmt(start)} - ${fmt(end)} (${start.getFullYear()})`;
     };
 
-    // Bucket sessions by period (across ALL employees in filtered range, not just active —
-    // pie shows full picture for that period)
+    // Bucket sessions by period — include ALL emps (not filtered to active)
+    // since pie shows the full picture for that period
     const byPeriodStats = new Map();
     const allPeriods = new Set();
     filtered.forEach(s => {
@@ -4208,27 +4209,25 @@ function renderKtvView() {
     });
 
     const sortedPeriods = [...allPeriods].sort((a, b) => b.localeCompare(a));
-    if (sortedPeriods.length === 0) {
+
+    // Determine selected period: user's choice (if still valid) else latest
+    if (!DATA.ktvSelectedPeriod || !sortedPeriods.includes(DATA.ktvSelectedPeriod)) {
+      DATA.ktvSelectedPeriod = sortedPeriods[0] || null;
+    }
+    const selectedPeriod = DATA.ktvSelectedPeriod;
+
+    if (!selectedPeriod) {
       shareArea.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:30px;">Không có dữ liệu trong khoảng đã chọn</div>';
     } else {
-      // Build HTML grid
-      const cardsHtml = sortedPeriods.map((pk, idx) => `
-        <div style="flex:1 1 320px;min-width:280px;max-width:520px;border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface);">
-          <div style="font-size:13px;font-weight:600;margin-bottom:6px;color:var(--text);">${periodLabel(pk)}</div>
-          <div style="height:200px;"><canvas id="ktvShareChart_${idx}"></canvas></div>
-        </div>
-      `).join('');
-      shareArea.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:14px;">${cardsHtml}</div>`;
-
-      // Create charts after DOM update
-      sortedPeriods.forEach((pk, idx) => {
-        const pie = buildPieData(byPeriodStats.get(pk));
-        const canvas = document.getElementById(`ktvShareChart_${idx}`);
-        if (canvas && pie.data.length > 0) {
-          const chart = makeDoughnut(canvas, pie, { fontSize: 10 });
-          if (chart) window.ktvShareCharts.push(chart);
-        }
-      });
+      const selectedLabel = periodLabel(selectedPeriod);
+      shareArea.innerHTML = `
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:6px;">Đang xem: <strong style="color:var(--text);">${selectedLabel}</strong> · Bấm vào tên kỳ trong bảng phía dưới để chọn kỳ khác</div>
+        <div style="height:240px;"><canvas id="ktvShareChart"></canvas></div>
+      `;
+      const pie = buildPieData(byPeriodStats.get(selectedPeriod));
+      if (pie.data.length > 0) {
+        window.ktvShareChart = makeDoughnut(document.getElementById('ktvShareChart'), pie, { fontSize: 12 });
+      }
     }
   }
 
@@ -4242,7 +4241,12 @@ function renderKtvView() {
     el.classList.toggle('on', el.dataset.view === tableView);
     el.style.background = el.dataset.view === tableView ? 'var(--bg)' : 'transparent';
     el.style.color = el.dataset.view === tableView ? 'var(--accent)' : 'var(--text-muted)';
-    el.onclick = () => { DATA.ktvTableView = el.dataset.view; renderKtvView(); };
+    el.onclick = () => {
+      DATA.ktvTableView = el.dataset.view;
+      // Reset selected period so latest is auto-selected for the new view
+      DATA.ktvSelectedPeriod = null;
+      renderKtvView();
+    };
   });
 
   const tableArea = document.getElementById('ktvTableArea');
@@ -4346,19 +4350,36 @@ function renderKtvView() {
 
       const sortedPeriods = [...allPeriods].sort((a, b) => b.localeCompare(a));
       let html = '';
+      const selectedPeriod = DATA.ktvSelectedPeriod;
       sortedPeriods.forEach(pk => {
         const rows = [...byPeriod.get(pk).values()].sort((a, b) => b.sessions - a.sessions);
         if (rows.length === 0) return;
+        const isSelected = pk === selectedPeriod;
+        const borderStyle = isSelected ? '2px solid var(--accent)' : '1px solid var(--border)';
+        const badge = isSelected ? `<span style="display:inline-block;background:var(--accent);color:#fff;font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;margin-left:6px;">▲ Đang xem trong biểu đồ</span>` : '';
         html += `
           <div style="margin-top:16px;">
-            <h4 style="font-size:14px;font-weight:600;margin:0 0 6px;">${periodLabel(pk)}</h4>
+            <h4 data-period="${pk}" class="ktv-period-header" style="font-size:14px;font-weight:600;margin:0 0 6px;cursor:pointer;user-select:none;display:flex;align-items:center;flex-wrap:wrap;gap:6px;" title="Bấm để xem biểu đồ tròn cho kỳ này">
+              ${periodLabel(pk)} ${badge}
+            </h4>
             ${renderMiniStats(rows)}
-            <div style="border:1px solid var(--border);border-radius:8px;overflow-x:auto;">
+            <div style="border:${borderStyle};border-radius:8px;overflow-x:auto;">
               ${renderTableHtml(rows)}
             </div>
           </div>`;
       });
       tableArea.innerHTML = html || '<div style="text-align:center;color:var(--text-muted);padding:20px;">Không có dữ liệu</div>';
+
+      // Wire up period header clicks → update selected period & re-render
+      tableArea.querySelectorAll('.ktv-period-header').forEach(el => {
+        el.onclick = () => {
+          DATA.ktvSelectedPeriod = el.dataset.period;
+          renderKtvView();
+          // Scroll the pie chart card into view smoothly
+          const card = document.getElementById('ktvShareCard');
+          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+      });
     }
   }
 
