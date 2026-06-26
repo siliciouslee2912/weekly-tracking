@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.20" />
+<meta name="version" content="v2026.06.22.21" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 default-week -->
+<!-- BUILD: 2026-06-22 dynamic-avg-cols -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -4256,13 +4256,32 @@ function renderKtvView() {
   if (activeEmpList.length === 0) {
     tableArea.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;">Không có KTV nào trong khoảng thời gian này</div>';
   } else {
-    // Helper: render one table from a list of {name, sessions, customers:Set, services:{}, lastDate}
-    function renderTableHtml(rows) {
+    // Helper: render one table from a list of {name, sessions, customers:Set, services:{}, lastDate, ...}
+    // view = 'total' | 'week' | 'month' | 'year'
+    // Tổng: shows Ca/KH column.
+    // Tuần: shows Số KH TB/Ngày + Số Đơn TB/Ngày (uses activeDays).
+    // Tháng: shows Số KH TB/Tuần + Số Đơn TB/Tuần (uses activeWeeks).
+    // Năm: shows Số KH TB/Tháng + Số Đơn TB/Tháng (uses activeMonths).
+    function renderTableHtml(rows, view) {
+      view = view || 'total';
+      // Determine sub-period label + divisor key
+      const subLabelMap = { week: 'Ngày', month: 'Tuần', year: 'Tháng' };
+      const divisorKey = { week: 'activeDays', month: 'activeWeeks', year: 'activeMonths' };
+      const subLabel = subLabelMap[view];
+      const dKey = divisorKey[view];
+
+      // Build header dynamically
+      const middleCols = (view === 'total')
+        ? `<th style="text-align:right;" title="Số ca / KH unique — số lần khách quay lại trung bình">Ca/KH</th>`
+        : `<th style="text-align:right;">Số KH TB/${subLabel}</th>
+           <th style="text-align:right;">Số Đơn TB/${subLabel}</th>`;
+
       let h = `<table class="ktv-table" style="width:100%;margin:0;">
         <thead><tr>
-          <th>#</th><th>KTV</th><th style="text-align:right;">Số ca</th>
+          <th>#</th><th>KTV</th>
+          <th style="text-align:right;">Số ca</th>
           <th style="text-align:right;">KH unique</th>
-          <th style="text-align:right;" title="Số ca / KH unique — số lần khách quay lại trung bình">Ca/KH</th>
+          ${middleCols}
           <th>Top dịch vụ</th>
           <th style="text-align:right;">Ngày làm cuối</th>
         </tr></thead><tbody>`;
@@ -4270,13 +4289,26 @@ function renderKtvView() {
         const custCount = e.customers.size;
         const topSvcs = Object.entries(e.services).sort((a, b) => b[1] - a[1]).slice(0, 3);
         const topSvcsHtml = topSvcs.map(([n, c]) => `<span style="display:inline-block;background:var(--surface-2);border-radius:4px;padding:2px 6px;font-size:11px;margin:1px;">${n} <strong>·${c}</strong></span>`).join(' ');
-        const avgPerCust = custCount ? (e.sessions / custCount).toFixed(1) : '—';
+
+        let middleCells;
+        if (view === 'total') {
+          const avgPerCust = custCount ? (e.sessions / custCount).toFixed(1) : '—';
+          middleCells = `<td style="text-align:right;">${avgPerCust}</td>`;
+        } else {
+          // Divide by sub-period count (active sub-periods only)
+          const subCount = (e[dKey] && e[dKey].size) ? e[dKey].size : 0;
+          const custAvg = subCount ? (custCount / subCount).toFixed(1) : '—';
+          const ordAvg  = subCount ? (e.sessions / subCount).toFixed(1) : '—';
+          middleCells = `
+            <td style="text-align:right;">${custAvg}</td>
+            <td style="text-align:right;">${ordAvg}</td>`;
+        }
         h += `<tr>
           <td>${idx + 1}</td>
           <td class="name-col"><strong>${e.name}</strong></td>
           <td style="text-align:right;font-weight:600;">${fmtNum(e.sessions)}</td>
           <td style="text-align:right;">${fmtNum(custCount)}</td>
-          <td style="text-align:right;">${avgPerCust}</td>
+          ${middleCells}
           <td>${topSvcsHtml}</td>
           <td style="text-align:right;color:var(--text-muted);font-size:11px;">${e.lastDate}</td>
         </tr>`;
@@ -4306,7 +4338,7 @@ function renderKtvView() {
 
     if (tableView === 'total') {
       // Single combined table — same as before
-      tableArea.innerHTML = renderTableHtml(activeEmpList);
+      tableArea.innerHTML = renderTableHtml(activeEmpList, 'total');
     } else {
       // Per-period: group filtered sessions by period for ACTIVE employees only,
       // then render one table per period (newest first).
@@ -4329,6 +4361,8 @@ function renderKtvView() {
       };
 
       // Bucket sessions by period, only for active KTVs
+      // Each KTV's stats includes activeDays/Weeks/Months sets so we can
+      // compute "Số KH TB/Ngày", "Số Đơn TB/Tuần", etc. depending on view.
       const activeNames = new Set(activeEmpList.map(e => e.name));
       const byPeriod = new Map();  // periodKey → Map(name → stats)
       const allPeriods = new Set();
@@ -4339,13 +4373,21 @@ function renderKtvView() {
         if (!byPeriod.has(pk)) byPeriod.set(pk, new Map());
         const empMap = byPeriod.get(pk);
         if (!empMap.has(s.name)) {
-          empMap.set(s.name, { name: s.name, sessions: 0, customers: new Set(), services: {}, lastDate: s.date });
+          empMap.set(s.name, {
+            name: s.name, sessions: 0, customers: new Set(), services: {}, lastDate: s.date,
+            activeDays: new Set(),    // unique YYYY-MM-DD this KTV worked in this period
+            activeWeeks: new Set(),   // unique Monday YYYY-MM-DD
+            activeMonths: new Set()   // unique YYYY-MM
+          });
         }
         const r = empMap.get(s.name);
         r.sessions++;
         r.customers.add(s.phone || s.customer);
         r.services[s.service] = (r.services[s.service] || 0) + 1;
         if (s.date > r.lastDate) r.lastDate = s.date;
+        r.activeDays.add(s.date);
+        r.activeWeeks.add(toISO(mondayOfDate(new Date(s.date))));
+        r.activeMonths.add(s.date.substring(0, 7));
       });
 
       const sortedPeriods = [...allPeriods].sort((a, b) => b.localeCompare(a));
@@ -4364,7 +4406,7 @@ function renderKtvView() {
             </h4>
             ${renderMiniStats(rows)}
             <div style="border:${borderStyle};border-radius:8px;overflow-x:auto;">
-              ${renderTableHtml(rows)}
+              ${renderTableHtml(rows, tableView)}
             </div>
           </div>`;
       });
