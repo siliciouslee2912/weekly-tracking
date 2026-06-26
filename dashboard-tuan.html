@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.27" />
+<meta name="version" content="v2026.06.22.28" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 pagination -->
+<!-- BUILD: 2026-06-22 pagination-labels -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -667,25 +667,54 @@ function paginate(items, page, pageSize) {
 // Build HTML for numbered page buttons. Returns '' if only 1 page.
 // Buttons are class='pagination-btn' with data-page attribute. Caller
 // must wire up onclick to update state and re-render.
-function paginationHtml(currentPage, totalPages) {
+// Layout: [← Trang trước]   [1] [2] [3] ...   [Trang sau →]
+// Plus a small info line showing range.
+function paginationHtml(currentPage, totalPages, itemLabel) {
   if (totalPages <= 1) return '';
-  let buttons = '';
-  // Prev arrow
+  itemLabel = itemLabel || 'mục';
+  const startIdx = (currentPage - 1) * PAGE_SIZE + 1;
+  const endIdx   = Math.min(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE);  // upper bound = currentPage * PAGE_SIZE (caller decides)
+
+  // Style helpers
+  const btnBase = 'padding:8px 14px;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:4px;';
+  const btnDisabled = 'padding:8px 14px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);border-radius:6px;font-size:13px;font-weight:500;cursor:not-allowed;opacity:0.5;display:inline-flex;align-items:center;gap:4px;';
+  const numBase = 'min-width:36px;height:36px;padding:0 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;';
+
+  let html = '<div class="pagination-bar" style="margin-top:16px;padding:12px 0 4px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:8px;align-items:center;">';
+
+  // Row of buttons
+  html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center;">';
+
+  // Previous
   if (currentPage > 1) {
-    buttons += `<button data-page="${currentPage - 1}" class="pagination-btn" style="min-width:32px;height:32px;padding:0 8px;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;cursor:pointer;">‹</button>`;
+    html += `<button data-page="${currentPage - 1}" class="pagination-btn" style="${btnBase}">← Trang trước</button>`;
+  } else {
+    html += `<button disabled style="${btnDisabled}">← Trang trước</button>`;
   }
+
+  // Numbered pages
   for (let p = 1; p <= totalPages; p++) {
     const isCurrent = p === currentPage;
     const bg    = isCurrent ? 'var(--accent)' : 'var(--surface-2)';
-    const color = isCurrent ? '#fff'         : 'var(--text)';
-    const fw    = isCurrent ? '600'          : '500';
-    buttons += `<button data-page="${p}" class="pagination-btn" style="min-width:32px;height:32px;padding:0 10px;background:${bg};color:${color};border:1px solid var(--border);border-radius:6px;font-weight:${fw};font-size:13px;cursor:pointer;">${p}</button>`;
+    const color = isCurrent ? '#fff'          : 'var(--text)';
+    const fw    = isCurrent ? '700'           : '500';
+    html += `<button data-page="${p}" class="pagination-btn" style="${numBase}background:${bg};color:${color};font-weight:${fw};">${p}</button>`;
   }
-  // Next arrow
+
+  // Next
   if (currentPage < totalPages) {
-    buttons += `<button data-page="${currentPage + 1}" class="pagination-btn" style="min-width:32px;height:32px;padding:0 8px;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;cursor:pointer;">›</button>`;
+    html += `<button data-page="${currentPage + 1}" class="pagination-btn" style="${btnBase}">Trang sau →</button>`;
+  } else {
+    html += `<button disabled style="${btnDisabled}">Trang sau →</button>`;
   }
-  return `<div class="pagination-bar" style="display:flex;justify-content:center;gap:6px;margin-top:14px;flex-wrap:wrap;">${buttons}</div>`;
+
+  html += '</div>';
+
+  // Info line
+  html += `<div style="font-size:12px;color:var(--text-muted);">Trang ${currentPage} / ${totalPages} · Mỗi trang ${PAGE_SIZE} ${itemLabel}</div>`;
+
+  html += '</div>';
+  return html;
 }
 function fmtDate(d){ d = new Date(d); return d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0'); }
 function toISODate(d){ const x = new Date(d); const o = x.getTimezoneOffset(); return new Date(x.getTime() - o*60000).toISOString().slice(0,10); }
@@ -2408,7 +2437,7 @@ function renderBranchMetrics() {
     </p>`;
 
   // Append pagination bar if needed
-  html += paginationHtml(pgInfo.page, pgInfo.totalPages);
+  html += paginationHtml(pgInfo.page, pgInfo.totalPages, isMonthly ? 'tháng' : 'tuần');
 
   area.innerHTML = html;
 
@@ -4502,7 +4531,7 @@ function renderKtvView() {
       const pgInfo = paginate(activeEmpList, DATA._ktvActivePage);
       DATA._ktvActivePage = pgInfo.page;
       let totalHtml = renderTableHtml(pgInfo.visible, 'total');
-      totalHtml += paginationHtml(pgInfo.page, pgInfo.totalPages);
+      totalHtml += paginationHtml(pgInfo.page, pgInfo.totalPages, 'KTV');
       tableArea.innerHTML = totalHtml;
       tableArea.querySelectorAll('.pagination-btn').forEach(btn => {
         btn.onclick = () => {
@@ -4589,8 +4618,9 @@ function renderKtvView() {
           </div>`;
       });
 
-      // Append pagination bar if needed
-      html += paginationHtml(pgInfo.page, pgInfo.totalPages);
+      // Append pagination bar if needed (item label depends on view)
+      const itemLabel = tableView === 'year' ? 'năm' : tableView === 'month' ? 'tháng' : 'tuần';
+      html += paginationHtml(pgInfo.page, pgInfo.totalPages, itemLabel);
       tableArea.innerHTML = html || '<div style="text-align:center;color:var(--text-muted);padding:20px;">Không có dữ liệu</div>';
 
       // Wire up pagination button clicks
