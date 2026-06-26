@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.22" />
+<meta name="version" content="v2026.06.22.23" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 reset-ktv-view-on-load -->
+<!-- BUILD: 2026-06-22 ktv-sort-filter -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -561,11 +561,21 @@
             <div>
               <h3>Bảng xếp hạng KTV đang làm</h3>
             </div>
-            <div class="metric-toggle-bar" id="ktvTableViewToggle" style="display:inline-flex;background:var(--surface-2);border-radius:8px;padding:3px;">
-              <div class="metric-toggle on" data-view="week" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tuần</div>
-              <div class="metric-toggle" data-view="month" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tháng</div>
-              <div class="metric-toggle" data-view="year" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Năm</div>
-              <div class="metric-toggle" data-view="total" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tổng</div>
+            <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="font-size:12px;color:var(--text-muted);">Sắp xếp:</span>
+                <div class="metric-toggle-bar" id="ktvSortByToggle" style="display:inline-flex;background:var(--surface-2);border-radius:8px;padding:3px;">
+                  <div class="metric-toggle on" data-sort="sessions" style="padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Số ca</div>
+                  <div class="metric-toggle" data-sort="customers" style="padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Số KH</div>
+                  <div class="metric-toggle" data-sort="avgOrders" style="padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Số đơn TB</div>
+                </div>
+              </div>
+              <div class="metric-toggle-bar" id="ktvTableViewToggle" style="display:inline-flex;background:var(--surface-2);border-radius:8px;padding:3px;">
+                <div class="metric-toggle on" data-view="week" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tuần</div>
+                <div class="metric-toggle" data-view="month" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tháng</div>
+                <div class="metric-toggle" data-view="year" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Năm</div>
+                <div class="metric-toggle" data-view="total" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tổng</div>
+              </div>
             </div>
           </div>
           <div class="card-body" id="ktvTableArea" style="padding:6px 16px 16px;overflow-x:auto;">
@@ -2979,10 +2989,11 @@ async function loadDataAndRender() {
   if (data.ktv) { delete data.ktv; }
 
   // Reset KTV view UI state on every page load (refresh) so user always
-  // starts at 'Tuần' view, regardless of what was last selected. These are
-  // UI preferences, not persistent data — should not carry across reloads.
+  // starts at 'Tuần' view + 'Số ca' sort, regardless of what was last selected.
+  // These are UI preferences, not persistent data — should not carry across reloads.
   data.ktvTableView = 'week';
   data.ktvSelectedPeriod = null;
+  data.ktvSortBy = 'sessions';
 
   // MIGRATION: if KTV sessions exist locally but Firestore main payload doesn't
   // have them (e.g. from a failed save when main doc > 1MB), push them to the
@@ -4242,7 +4253,28 @@ function renderKtvView() {
   if (!DATA.ktvTableView) DATA.ktvTableView = 'week';
   const tableView = DATA.ktvTableView;
 
-  // Toggle UI sync
+  // Sort state
+  if (!DATA.ktvSortBy) DATA.ktvSortBy = 'sessions';
+  const sortBy = DATA.ktvSortBy;  // 'sessions' | 'customers' | 'avgOrders'
+
+  // Build sort comparator. avgOrders divides by active sub-period count
+  // (activeDays for week view, activeWeeks for month, activeMonths for year).
+  // For 'total' view there's no sub-period — fall back to sessions count for avgOrders.
+  function getSortValue(e) {
+    if (sortBy === 'customers') return e.customers.size;
+    if (sortBy === 'avgOrders') {
+      const dKey = tableView === 'week' ? 'activeDays'
+                : tableView === 'month' ? 'activeWeeks'
+                : tableView === 'year' ? 'activeMonths'
+                : null;
+      if (dKey && e[dKey] && e[dKey].size) return e.sessions / e[dKey].size;
+      return e.sessions;  // fallback for 'total'
+    }
+    return e.sessions;  // default: sort by sessions
+  }
+  const sortComparator = (a, b) => getSortValue(b) - getSortValue(a);
+
+  // View toggle UI sync
   document.querySelectorAll('#ktvTableViewToggle .metric-toggle').forEach(el => {
     el.classList.toggle('on', el.dataset.view === tableView);
     el.style.background = el.dataset.view === tableView ? 'var(--bg)' : 'transparent';
@@ -4255,8 +4287,19 @@ function renderKtvView() {
     };
   });
 
+  // Sort toggle UI sync
+  document.querySelectorAll('#ktvSortByToggle .metric-toggle').forEach(el => {
+    el.classList.toggle('on', el.dataset.sort === sortBy);
+    el.style.background = el.dataset.sort === sortBy ? 'var(--bg)' : 'transparent';
+    el.style.color = el.dataset.sort === sortBy ? 'var(--accent)' : 'var(--text-muted)';
+    el.onclick = () => {
+      DATA.ktvSortBy = el.dataset.sort;
+      renderKtvView();
+    };
+  });
+
   const tableArea = document.getElementById('ktvTableArea');
-  const empsList = Object.values(empStats).sort((a, b) => b.sessions - a.sessions);
+  const empsList = Object.values(empStats).sort(sortComparator);
   const activeEmpList = empsList.filter(e => activeEmps.has(e.name));
 
   if (activeEmpList.length === 0) {
@@ -4400,7 +4443,7 @@ function renderKtvView() {
       let html = '';
       const selectedPeriod = DATA.ktvSelectedPeriod;
       sortedPeriods.forEach(pk => {
-        const rows = [...byPeriod.get(pk).values()].sort((a, b) => b.sessions - a.sessions);
+        const rows = [...byPeriod.get(pk).values()].sort(sortComparator);
         if (rows.length === 0) return;
         const isSelected = pk === selectedPeriod;
         const borderStyle = isSelected ? '2px solid var(--accent)' : '1px solid var(--border)';
