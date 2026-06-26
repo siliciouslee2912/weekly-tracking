@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.21" />
+<meta name="version" content="v2026.06.22.22" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 dynamic-avg-cols -->
+<!-- BUILD: 2026-06-22 reset-ktv-view-on-load -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -2977,6 +2977,12 @@ async function loadDataAndRender() {
   if (!Array.isArray(data.ktvSessions)) data.ktvSessions = [];
   // Clean up legacy hardcoded ktv object if it exists
   if (data.ktv) { delete data.ktv; }
+
+  // Reset KTV view UI state on every page load (refresh) so user always
+  // starts at 'Tuần' view, regardless of what was last selected. These are
+  // UI preferences, not persistent data — should not carry across reloads.
+  data.ktvTableView = 'week';
+  data.ktvSelectedPeriod = null;
 
   // MIGRATION: if KTV sessions exist locally but Firestore main payload doesn't
   // have them (e.g. from a failed save when main doc > 1MB), push them to the
