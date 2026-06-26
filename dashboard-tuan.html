@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.25" />
+<meta name="version" content="v2026.06.22.26" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 ktv-all-branches -->
+<!-- BUILD: 2026-06-22 branch-from-filename -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -3312,6 +3312,25 @@ function detectBranchFromCoSo(s) {
   return null;
 }
 
+// Detect branch from FILE NAME (preferred — set per user request).
+// File names from POS often encode Vietnamese as e.g.:
+//   'Tra__n_Xua_n_Soa_n' = "Trần Xuân Soạn"
+//   'Ha__Đo_ng'          = "Hà Đông"
+//   'Cau_Giay'           = "Cầu Giấy"
+// Strategy: lowercase, strip diacritics, đ→d, then REMOVE all separators
+// (_, -, ., space) so we can match concatenated keywords as substring.
+function detectBranchFromFilename(filename) {
+  if (!filename) return null;
+  const cleaned = String(filename).toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/[_\-\s.]/g, '');
+  if (cleaned.includes('tranxuansoan')) return 'tx-soan';
+  if (cleaned.includes('caugiay') || cleaned.includes('quanhoa')) return 'cau-giay';
+  if (cleaned.includes('hadong')) return 'ha-dong';
+  return null;
+}
+
 // Parse "HH:MM DD/MM/YYYY" → Date object
 function parseTransactionDate(s) {
   const m = String(s).trim().match(/^(\d{1,2}):(\d{2})\s+(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -3363,7 +3382,7 @@ function toISO(d) {
 }
 
 // Main parser: takes ArrayBuffer, returns structured parse result
-function parseExcelSalesFile(arrayBuffer) {
+function parseExcelSalesFile(arrayBuffer, filename) {
   const wb = XLSX.read(arrayBuffer, { type: 'array' });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
@@ -3376,14 +3395,22 @@ function parseExcelSalesFile(arrayBuffer) {
     throw new Error('Thiếu cột bắt buộc. File cần có: NGÀY, NGUYÊN GIÁ, TỔNG ĐÃ THANH TOÁN.');
   }
 
+  // Branch detection: prefer filename. Compute once outside row loop since
+  // it's identical for every row in the file.
+  const branchFromFilename = detectBranchFromFilename(filename);
+
   const transactions = [];
   const branchCounts = {};  // count txns per branch (in case file has multiple)
   for (let i = hdrIdx + 1; i < rows.length; i++) {
     const r = rows[i] || [];
     const dt = parseTransactionDate(r[col.date]);
     if (!dt) continue;
-    const coSo = col.coSo !== undefined ? String(r[col.coSo] || '').trim() : '';
-    const branchId = detectBranchFromCoSo(coSo);
+    // Use filename detection if available, otherwise fall back to CƠ SỞ column data.
+    let branchId = branchFromFilename;
+    if (!branchId) {
+      const coSo = col.coSo !== undefined ? String(r[col.coSo] || '').trim() : '';
+      branchId = detectBranchFromCoSo(coSo);
+    }
     if (branchId) branchCounts[branchId] = (branchCounts[branchId] || 0) + 1;
     const gross = Number(r[col.gross]) || 0;
     const promo = col.promo !== undefined ? (Number(r[col.promo]) || 0) : 0;
@@ -3521,7 +3548,7 @@ function buildKtvColMap(headerRow) {
   return map;
 }
 
-function parseExcelKtvFile(arrayBuffer) {
+function parseExcelKtvFile(arrayBuffer, filename) {
   const wb = XLSX.read(arrayBuffer, { type: 'array' });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
@@ -3538,6 +3565,9 @@ function parseExcelKtvFile(arrayBuffer) {
     throw new Error('Thiếu cột bắt buộc: TÊN NHÂN VIÊN, NGÀY LÀM, THẺ DỊCH VỤ.');
   }
 
+  // Branch detection: prefer filename. Compute once outside row loop.
+  const branchFromFilename = detectBranchFromFilename(filename);
+
   // Parse sessions
   const sessions = [];
   const branchCounts = {};
@@ -3547,8 +3577,12 @@ function parseExcelKtvFile(arrayBuffer) {
     if (!rawName) continue;
     const dt = parseTransactionDate(r[col.date]);
     if (!dt) continue;
-    const coSo = col.coSo !== undefined ? String(r[col.coSo] || '').trim() : '';
-    const branchId = detectBranchFromCoSo(coSo);
+    // Use filename detection if available, otherwise fall back to CƠ SỞ column data.
+    let branchId = branchFromFilename;
+    if (!branchId) {
+      const coSo = col.coSo !== undefined ? String(r[col.coSo] || '').trim() : '';
+      branchId = detectBranchFromCoSo(coSo);
+    }
     if (branchId) branchCounts[branchId] = (branchCounts[branchId] || 0) + 1;
 
     // Some rows have multiple KTV sharing one session (e.g. "Phạm Ánh Linh, Lâm Thanh Huyền")
@@ -3626,11 +3660,11 @@ uploadFileInput.onchange = async (e) => {
     }
     let result;
     if (isKtv) {
-      result = parseExcelKtvFile(buf);
+      result = parseExcelKtvFile(buf, file.name);
       _currentParse = result;
       showKtvUploadPreview(file.name, result);
     } else {
-      result = parseExcelSalesFile(buf);
+      result = parseExcelSalesFile(buf, file.name);
       _currentParse = result;
       showUploadPreview(file.name, result);
     }
