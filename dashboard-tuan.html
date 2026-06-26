@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.26" />
+<meta name="version" content="v2026.06.22.27" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 branch-from-filename -->
+<!-- BUILD: 2026-06-22 pagination -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -644,6 +644,49 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 function uid(){ return 'e_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
 function fmtVND(n){ if(!n) return '0₫'; return new Intl.NumberFormat('vi-VN').format(Math.round(n)) + '₫'; }
 function fmtNum(n){ return new Intl.NumberFormat('vi-VN').format(Math.round(n||0)); }
+
+// ===== PAGINATION HELPERS =====
+// Used by branch metrics table + KTV ranking table. Max items per page = 12.
+const PAGE_SIZE = 12;
+
+// Slice items by page and return {visible, page, totalPages}.
+function paginate(items, page, pageSize) {
+  pageSize = pageSize || PAGE_SIZE;
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page || 1), totalPages);
+  const start = (safePage - 1) * pageSize;
+  return {
+    visible: items.slice(start, start + pageSize),
+    page: safePage,
+    totalPages,
+    total
+  };
+}
+
+// Build HTML for numbered page buttons. Returns '' if only 1 page.
+// Buttons are class='pagination-btn' with data-page attribute. Caller
+// must wire up onclick to update state and re-render.
+function paginationHtml(currentPage, totalPages) {
+  if (totalPages <= 1) return '';
+  let buttons = '';
+  // Prev arrow
+  if (currentPage > 1) {
+    buttons += `<button data-page="${currentPage - 1}" class="pagination-btn" style="min-width:32px;height:32px;padding:0 8px;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;cursor:pointer;">‹</button>`;
+  }
+  for (let p = 1; p <= totalPages; p++) {
+    const isCurrent = p === currentPage;
+    const bg    = isCurrent ? 'var(--accent)' : 'var(--surface-2)';
+    const color = isCurrent ? '#fff'         : 'var(--text)';
+    const fw    = isCurrent ? '600'          : '500';
+    buttons += `<button data-page="${p}" class="pagination-btn" style="min-width:32px;height:32px;padding:0 10px;background:${bg};color:${color};border:1px solid var(--border);border-radius:6px;font-weight:${fw};font-size:13px;cursor:pointer;">${p}</button>`;
+  }
+  // Next arrow
+  if (currentPage < totalPages) {
+    buttons += `<button data-page="${currentPage + 1}" class="pagination-btn" style="min-width:32px;height:32px;padding:0 8px;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;cursor:pointer;">›</button>`;
+  }
+  return `<div class="pagination-bar" style="display:flex;justify-content:center;gap:6px;margin-top:14px;flex-wrap:wrap;">${buttons}</div>`;
+}
 function fmtDate(d){ d = new Date(d); return d.getDate().toString().padStart(2,'0') + '/' + (d.getMonth()+1).toString().padStart(2,'0'); }
 function toISODate(d){ const x = new Date(d); const o = x.getTimezoneOffset(); return new Date(x.getTime() - o*60000).toISOString().slice(0,10); }
 function startOfWeek(d){ const x = new Date(d); const day = (x.getDay()+6)%7; x.setDate(x.getDate()-day); x.setHours(0,0,0,0); return x; }
@@ -2284,9 +2327,15 @@ function renderBranchMetrics() {
     return;
   }
 
-  // Build one section per period
+  // Pagination: max 12 period sections per page
+  if (!DATA._branchMetricsPage) DATA._branchMetricsPage = 1;
+  const pgInfo = paginate(periodList, DATA._branchMetricsPage);
+  DATA._branchMetricsPage = pgInfo.page;
+  const visiblePeriods = pgInfo.visible;
+
+  // Build one section per period (only visible page)
   let html = '';
-  periodList.forEach(pk => {
+  visiblePeriods.forEach(pk => {
     const branchMap = byPeriodBranch.get(pk);
     if (!branchMap) return;
 
@@ -2358,7 +2407,18 @@ function renderBranchMetrics() {
       AOV = giá trị trung bình mỗi đơn · ARPU = DT trung bình mỗi khách.
     </p>`;
 
+  // Append pagination bar if needed
+  html += paginationHtml(pgInfo.page, pgInfo.totalPages);
+
   area.innerHTML = html;
+
+  // Wire up pagination buttons
+  area.querySelectorAll('.pagination-btn').forEach(btn => {
+    btn.onclick = () => {
+      DATA._branchMetricsPage = parseInt(btn.dataset.page, 10);
+      renderBranchMetrics();
+    };
+  });
 }
 
 /* ==========================================================
@@ -2991,6 +3051,10 @@ async function loadDataAndRender() {
   data.ktvTableView = 'week';
   data.ktvSelectedPeriod = null;
   data.ktvSortBy = 'sessions';
+  // Pagination state — reset to page 1 on each load
+  data._branchMetricsPage = 1;
+  data._ktvActivePage = 1;
+  data._ktvPeriodPage = 1;
 
   // MIGRATION: if KTV sessions exist locally but Firestore main payload doesn't
   // have them (e.g. from a failed save when main doc > 1MB), push them to the
@@ -4087,7 +4151,13 @@ function renderKtvView() {
     const btn = document.createElement('button');
     btn.textContent = name;
     if (bid === ktvActiveBranch) btn.classList.add('on');
-    btn.onclick = () => { ktvActiveBranch = bid; renderKtvView(); };
+    btn.onclick = () => {
+      ktvActiveBranch = bid;
+      DATA._ktvActivePage = 1;
+      DATA._ktvPeriodPage = 1;
+      DATA.ktvSelectedPeriod = null;
+      renderKtvView();
+    };
     tabsEl.appendChild(btn);
   });
 
@@ -4321,8 +4391,10 @@ function renderKtvView() {
     el.style.color = el.dataset.view === tableView ? 'var(--accent)' : 'var(--text-muted)';
     el.onclick = () => {
       DATA.ktvTableView = el.dataset.view;
-      // Reset selected period so latest is auto-selected for the new view
+      // Reset selected period + pagination so latest is auto-selected for the new view
       DATA.ktvSelectedPeriod = null;
+      DATA._ktvActivePage = 1;
+      DATA._ktvPeriodPage = 1;
       renderKtvView();
     };
   });
@@ -4425,8 +4497,19 @@ function renderKtvView() {
     }
 
     if (tableView === 'total') {
-      // Single combined table — same as before
-      tableArea.innerHTML = renderTableHtml(activeEmpList, 'total');
+      // Single combined table — paginate KTV rows (max 12 per page)
+      if (!DATA._ktvActivePage) DATA._ktvActivePage = 1;
+      const pgInfo = paginate(activeEmpList, DATA._ktvActivePage);
+      DATA._ktvActivePage = pgInfo.page;
+      let totalHtml = renderTableHtml(pgInfo.visible, 'total');
+      totalHtml += paginationHtml(pgInfo.page, pgInfo.totalPages);
+      tableArea.innerHTML = totalHtml;
+      tableArea.querySelectorAll('.pagination-btn').forEach(btn => {
+        btn.onclick = () => {
+          DATA._ktvActivePage = parseInt(btn.dataset.page, 10);
+          renderKtvView();
+        };
+      });
     } else {
       // Per-period: group filtered sessions by period for ACTIVE employees only,
       // then render one table per period (newest first).
@@ -4479,9 +4562,16 @@ function renderKtvView() {
       });
 
       const sortedPeriods = [...allPeriods].sort((a, b) => b.localeCompare(a));
+
+      // Pagination: max 12 period sections per page
+      if (!DATA._ktvPeriodPage) DATA._ktvPeriodPage = 1;
+      const pgInfo = paginate(sortedPeriods, DATA._ktvPeriodPage);
+      DATA._ktvPeriodPage = pgInfo.page;
+      const visiblePeriods = pgInfo.visible;
+
       let html = '';
       const selectedPeriod = DATA.ktvSelectedPeriod;
-      sortedPeriods.forEach(pk => {
+      visiblePeriods.forEach(pk => {
         const rows = [...byPeriod.get(pk).values()].sort(sortComparator);
         if (rows.length === 0) return;
         const isSelected = pk === selectedPeriod;
@@ -4498,7 +4588,18 @@ function renderKtvView() {
             </div>
           </div>`;
       });
+
+      // Append pagination bar if needed
+      html += paginationHtml(pgInfo.page, pgInfo.totalPages);
       tableArea.innerHTML = html || '<div style="text-align:center;color:var(--text-muted);padding:20px;">Không có dữ liệu</div>';
+
+      // Wire up pagination button clicks
+      tableArea.querySelectorAll('.pagination-btn').forEach(btn => {
+        btn.onclick = () => {
+          DATA._ktvPeriodPage = parseInt(btn.dataset.page, 10);
+          renderKtvView();
+        };
+      });
 
       // Wire up period header clicks → update selected period & re-render
       tableArea.querySelectorAll('.ktv-period-header').forEach(el => {
