@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.24" />
+<meta name="version" content="v2026.06.22.25" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 sort-dropdown -->
+<!-- BUILD: 2026-06-22 ktv-all-branches -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -4023,7 +4023,7 @@ saveData = function(data) {
 /* ==========================================================
    KTV VIEW (Hiệu suất nhân viên)
 ========================================================== */
-let ktvActiveBranch = 'cau-giay';
+let ktvActiveBranch = 'all';
 let ktvShareChart = null;
 
 function renderKtvView() {
@@ -4032,20 +4032,24 @@ function renderKtvView() {
 
   const sessions = DATA.ktvSessions;
 
-  // Auto-discover branches from sessions
-  const branchesFromData = [...new Set(sessions.map(s => s.branchId))];
+  // Branch tabs: always show 'Toàn hệ thống 3AM' + all 3 spa branches
+  // (regardless of whether they have data yet). Like báo cáo tổng quan.
   const tabsEl = document.getElementById('ktvBranchTabs');
   tabsEl.innerHTML = '';
-  const branchOrder = ['tx-soan', 'cau-giay', 'ha-dong'];
-  const branches = branchOrder.filter(b => branchesFromData.includes(b));
-  if (branches.length === 0 && sessions.length > 0) branches.push(...branchesFromData);
+  const spaBranchIds = ['tx-soan', 'cau-giay', 'ha-dong'];
+  const tabOrder = ['all', ...spaBranchIds];
 
-  // Reset active branch if no longer valid
-  if (!branches.includes(ktvActiveBranch)) ktvActiveBranch = branches[0] || 'tx-soan';
+  // Reset active branch if invalid
+  if (!tabOrder.includes(ktvActiveBranch)) ktvActiveBranch = 'all';
 
-  branches.forEach(bid => {
-    const branch = BRANCHES.find(b => b.id === bid);
-    const name = branch ? branch.name.replace("3AM D'SPA · ", '') : bid;
+  tabOrder.forEach(bid => {
+    let name;
+    if (bid === 'all') {
+      name = 'Toàn hệ thống 3AM';
+    } else {
+      const branch = BRANCHES.find(b => b.id === bid);
+      name = branch ? branch.name.replace("3AM D'SPA · ", '') : bid;
+    }
     const btn = document.createElement('button');
     btn.textContent = name;
     if (bid === ktvActiveBranch) btn.classList.add('on');
@@ -4053,9 +4057,13 @@ function renderKtvView() {
     tabsEl.appendChild(btn);
   });
 
+  // Filter sessions by active branch (or all spa branches when 'all')
+  const sessionsForBranch = ktvActiveBranch === 'all'
+    ? sessions.filter(s => spaBranchIds.includes(s.branchId))
+    : sessions.filter(s => s.branchId === ktvActiveBranch);
+
   // Empty state
   const emptyEl = document.getElementById('ktvEmptyState');
-  const sessionsForBranch = sessions.filter(s => s.branchId === ktvActiveBranch);
   if (sessionsForBranch.length === 0) {
     emptyEl.style.display = 'block';
     document.getElementById('ktvShareCard').style.display = 'none';
