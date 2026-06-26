@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.23" />
+<meta name="version" content="v2026.06.22.24" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 ktv-sort-filter -->
+<!-- BUILD: 2026-06-22 sort-dropdown -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -561,21 +561,18 @@
             <div>
               <h3>Bảng xếp hạng KTV đang làm</h3>
             </div>
-            <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-              <div style="display:flex;align-items:center;gap:6px;">
-                <span style="font-size:12px;color:var(--text-muted);">Sắp xếp:</span>
-                <div class="metric-toggle-bar" id="ktvSortByToggle" style="display:inline-flex;background:var(--surface-2);border-radius:8px;padding:3px;">
-                  <div class="metric-toggle on" data-sort="sessions" style="padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Số ca</div>
-                  <div class="metric-toggle" data-sort="customers" style="padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Số KH</div>
-                  <div class="metric-toggle" data-sort="avgOrders" style="padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Số đơn TB</div>
-                </div>
-              </div>
-              <div class="metric-toggle-bar" id="ktvTableViewToggle" style="display:inline-flex;background:var(--surface-2);border-radius:8px;padding:3px;">
-                <div class="metric-toggle on" data-view="week" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tuần</div>
-                <div class="metric-toggle" data-view="month" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tháng</div>
-                <div class="metric-toggle" data-view="year" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Năm</div>
-                <div class="metric-toggle" data-view="total" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tổng</div>
-              </div>
+            <div class="metric-toggle-bar" id="ktvControlBar" style="display:inline-flex;background:var(--surface-2);border-radius:8px;padding:3px;align-items:center;gap:0;">
+              <select id="ktvSortBySelect" style="background:transparent;border:none;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;color:var(--text);outline:none;appearance:none;-webkit-appearance:none;padding-right:22px;background-image:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%2210%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%2364748b%22 stroke-width=%223%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22><polyline points=%226 9 12 15 18 9%22/></svg>');background-repeat:no-repeat;background-position:right 6px center;">
+                <option value="sessions">Sắp xếp: Số ca</option>
+                <option value="customers">Sắp xếp: Số KH</option>
+                <option value="avgOrders">Sắp xếp: Số đơn TB</option>
+                <option value="avgCustomers">Sắp xếp: Số KH TB</option>
+              </select>
+              <span style="display:inline-block;width:1px;height:18px;background:var(--border);margin:0 4px;"></span>
+              <div class="metric-toggle on" data-view="week" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tuần</div>
+              <div class="metric-toggle" data-view="month" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tháng</div>
+              <div class="metric-toggle" data-view="year" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Năm</div>
+              <div class="metric-toggle" data-view="total" style="padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;color:var(--text-muted);">Tổng</div>
             </div>
           </div>
           <div class="card-body" id="ktvTableArea" style="padding:6px 16px 16px;overflow-x:auto;">
@@ -4255,27 +4252,28 @@ function renderKtvView() {
 
   // Sort state
   if (!DATA.ktvSortBy) DATA.ktvSortBy = 'sessions';
-  const sortBy = DATA.ktvSortBy;  // 'sessions' | 'customers' | 'avgOrders'
+  const sortBy = DATA.ktvSortBy;  // 'sessions' | 'customers' | 'avgOrders' | 'avgCustomers'
 
-  // Build sort comparator. avgOrders divides by active sub-period count
+  // Build sort comparator. avgOrders/avgCustomers divides by active sub-period count
   // (activeDays for week view, activeWeeks for month, activeMonths for year).
-  // For 'total' view there's no sub-period — fall back to sessions count for avgOrders.
+  // For 'total' view there's no sub-period — falls back to raw count.
   function getSortValue(e) {
     if (sortBy === 'customers') return e.customers.size;
-    if (sortBy === 'avgOrders') {
+    if (sortBy === 'avgOrders' || sortBy === 'avgCustomers') {
       const dKey = tableView === 'week' ? 'activeDays'
                 : tableView === 'month' ? 'activeWeeks'
                 : tableView === 'year' ? 'activeMonths'
                 : null;
-      if (dKey && e[dKey] && e[dKey].size) return e.sessions / e[dKey].size;
-      return e.sessions;  // fallback for 'total'
+      const numerator = sortBy === 'avgCustomers' ? e.customers.size : e.sessions;
+      if (dKey && e[dKey] && e[dKey].size) return numerator / e[dKey].size;
+      return numerator;  // fallback for 'total'
     }
     return e.sessions;  // default: sort by sessions
   }
   const sortComparator = (a, b) => getSortValue(b) - getSortValue(a);
 
-  // View toggle UI sync
-  document.querySelectorAll('#ktvTableViewToggle .metric-toggle').forEach(el => {
+  // View toggle UI sync (selector lookup updated — now inside #ktvControlBar)
+  document.querySelectorAll('#ktvControlBar .metric-toggle').forEach(el => {
     el.classList.toggle('on', el.dataset.view === tableView);
     el.style.background = el.dataset.view === tableView ? 'var(--bg)' : 'transparent';
     el.style.color = el.dataset.view === tableView ? 'var(--accent)' : 'var(--text-muted)';
@@ -4287,16 +4285,15 @@ function renderKtvView() {
     };
   });
 
-  // Sort toggle UI sync
-  document.querySelectorAll('#ktvSortByToggle .metric-toggle').forEach(el => {
-    el.classList.toggle('on', el.dataset.sort === sortBy);
-    el.style.background = el.dataset.sort === sortBy ? 'var(--bg)' : 'transparent';
-    el.style.color = el.dataset.sort === sortBy ? 'var(--accent)' : 'var(--text-muted)';
-    el.onclick = () => {
-      DATA.ktvSortBy = el.dataset.sort;
+  // Sort select dropdown sync
+  const sortSelect = document.getElementById('ktvSortBySelect');
+  if (sortSelect) {
+    sortSelect.value = sortBy;
+    sortSelect.onchange = () => {
+      DATA.ktvSortBy = sortSelect.value;
       renderKtvView();
     };
-  });
+  }
 
   const tableArea = document.getElementById('ktvTableArea');
   const empsList = Object.values(empStats).sort(sortComparator);
