@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.16" />
+<meta name="version" content="v2026.06.22.17" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 toggle-week-month-year-total -->
+<!-- BUILD: 2026-06-22 fix-staff-nav-active -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -4338,6 +4338,10 @@ renderAll = function() {
   const kv = document.getElementById('ktvView');
   if (activeMode === 'staff') {
     dv.style.display = 'none'; kv.classList.add('active');
+    // Sidebar nav: highlight current tab (the original renderAll did this but
+    // we don't call it in staff branch, so do it explicitly here).
+    document.querySelectorAll('.sidebar .nav-item').forEach(el =>
+      el.classList.toggle('active', el.dataset.mode === activeMode));
     // Show date range in KTV view too (filter sessions by it)
     const dr = document.getElementById('dateRange'); if (dr) dr.style.display = '';
     const ab = document.getElementById('addBtn'); if (ab) ab.style.display = 'none';
