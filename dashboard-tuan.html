@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.29" />
+<meta name="version" content="v2026.06.22.30" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 scroll-restore -->
+<!-- BUILD: 2026-06-22 fix-coSo-scope -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -3503,10 +3503,12 @@ function parseExcelSalesFile(arrayBuffer, filename) {
     const r = rows[i] || [];
     const dt = parseTransactionDate(r[col.date]);
     if (!dt) continue;
+    // Read CƠ SỞ cell once — used for fallback branch detection AND
+    // stored on the transaction row for downstream debugging.
+    const coSo = col.coSo !== undefined ? String(r[col.coSo] || '').trim() : '';
     // Use filename detection if available, otherwise fall back to CƠ SỞ column data.
     let branchId = branchFromFilename;
     if (!branchId) {
-      const coSo = col.coSo !== undefined ? String(r[col.coSo] || '').trim() : '';
       branchId = detectBranchFromCoSo(coSo);
     }
     if (branchId) branchCounts[branchId] = (branchCounts[branchId] || 0) + 1;
