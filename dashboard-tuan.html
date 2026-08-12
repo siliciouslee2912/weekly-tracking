@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.30" />
+<meta name="version" content="v2026.06.22.31" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 fix-coSo-scope -->
+<!-- BUILD: 2026-06-22 CRITICAL-fix-data-wipe -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -1039,20 +1039,18 @@ const SEED_VERSION = 'tx-soan-cau-giay-2026-05-14';
 
 const _stored = loadData();
 let DATA;
-if (_stored && _stored._seedVersion === SEED_VERSION) {
+if (_stored) {
+  // BUGFIX (2026-06-22): NEVER reset localStorage to seed if user data exists,
+  // even if _seedVersion mismatches. Previous behavior was:
+  //   if (_stored._seedVersion !== SEED_VERSION) → wipe DATA to seed, backup old.
+  // The bug: if Firestore load subsequently failed, the SEED would get pushed
+  // to Firestore, wiping the user's real sales data (only ktvSessions survived,
+  // as those are in separate per-year docs). Cost user 1400+ daily entries.
+  //
+  // New behavior: always keep user data. Ensure _seedVersion is set so future
+  // migrations can compare. Firestore load will overwrite with cloud truth.
   DATA = _stored;
-} else if (_stored) {
-  // SEED_VERSION đã thay đổi → auto-refresh sang dữ liệu mới nhất.
-  // Thông báo bằng console để người dùng biết.
-  console.warn(
-    '%c[Weekly Tracking] Đang tự động cập nhật dữ liệu mẫu mới (' + SEED_VERSION + '). ' +
-    'Mọi chỉnh sửa cũ đã được sao lưu vào localStorage key "ezs_dashboard_v8_backup".',
-    'color:#dc2626;font-weight:bold;font-size:13px'
-  );
-  try { localStorage.setItem(STORAGE_KEY + '_backup', JSON.stringify(_stored)); } catch(e){}
-  DATA = seedRealData();
-  DATA._seedVersion = SEED_VERSION;
-  saveData(DATA);
+  if (!DATA._seedVersion) DATA._seedVersion = SEED_VERSION;
 } else {
   // No localStorage yet → first-time visit, load seed.
   DATA = seedRealData();
