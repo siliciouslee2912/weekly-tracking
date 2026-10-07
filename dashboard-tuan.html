@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.10.07.1" />
+<meta name="version" content="v2026.10.07.2" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-10-07 branch-metrics-dt-gop -->
+<!-- BUILD: 2026-10-07 reset-metric-on-f5 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -3222,7 +3222,7 @@ function syncStateToHash() {
   history.replaceState(null, '', newHash);
 }
 
-function loadStateFromHash(restoreDateRange) {
+function loadStateFromHash(restoreEphemeral) {
   const raw = location.hash.replace(/^#/, '');
   if (!raw) return false;
   const params = new URLSearchParams(raw);
@@ -3236,18 +3236,20 @@ function loadStateFromHash(restoreDateRange) {
   if (mode && VALID_MODES.includes(mode))     activeMode   = mode;
   if (view && VALID_VIEWS.includes(view))     activeView   = view;
   if (branch && BRANCHES.some(b => b.id === branch || branch === 'all')) activeBranch = branch;
-  if (metric && VALID_METRICS.includes(metric)) revenueMode = metric;
-  // dateRange only restored from hash on user navigation (back/forward) — not
-  // on initial page load. This ensures defaultDateRange wins on F5/reload, so
-  // changes to default ranges propagate without stale URL hashes interfering.
-  if (restoreDateRange && from && /^\d{4}-\d{2}-\d{2}$/.test(from) && to && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
+  // metric + dateRange are "ephemeral" UI state — only restored on user navigation
+  // (back/forward via hashchange), NOT on initial page load (F5/refresh). On F5
+  // the metric resets to default 'net' (DT thuần) so user doesn't come back to
+  // the dashboard still in CTKM/Voucher view from a previous session.
+  if (restoreEphemeral && metric && VALID_METRICS.includes(metric)) revenueMode = metric;
+  if (restoreEphemeral && from && /^\d{4}-\d{2}-\d{2}$/.test(from) && to && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
     dateRange = { start: from, end: to };
   }
   // After loading mode, sync dateRange to default for that mode if not from hash.
   // Without this, mode='weekly' in hash + initial load would use OLD dateRange
   // initialized at line 973 (when activeMode was likely 'monthly' by default).
-  if (!restoreDateRange) {
+  if (!restoreEphemeral) {
     dateRange = defaultDateRange(activeMode);
+    revenueMode = 'net';  // reset to DT thuần default
   }
   return true;
 }
