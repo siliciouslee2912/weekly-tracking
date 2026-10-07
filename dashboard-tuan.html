@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.06.22.32" />
+<meta name="version" content="v2026.10.07.1" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-06-22 backup-restore -->
+<!-- BUILD: 2026-10-07 branch-metrics-dt-gop -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -2341,14 +2341,15 @@ function renderBranchMetrics() {
       allPeriods.add(pk);
       if (!byPeriodBranch.has(pk)) byPeriodBranch.set(pk, new Map());
       const branchMap = byPeriodBranch.get(pk);
-      if (!branchMap.has(b.id)) branchMap.set(b.id, { customers: 0, orders: 0, net: 0 });
+      if (!branchMap.has(b.id)) branchMap.set(b.id, { customers: 0, orders: 0, net: 0, gross: 0 });
       const slot = branchMap.get(b.id);
       slot.customers += (e.newCustTotal || 0) + (e.returning || 0);
       slot.orders    += (e.orders || 0);
       const gross   = (e.revenue?.service || 0) + (e.revenue?.product || 0);
       const promo   = (e.promotions?.service || 0) + (e.promotions?.product || 0);
       const voucher = (e.promoVoucher?.service || 0) + (e.promoVoucher?.product || 0);
-      slot.net += (gross - promo - voucher);
+      slot.gross += gross;
+      slot.net   += (gross - promo - voucher);
     }
   }
 
@@ -2375,14 +2376,15 @@ function renderBranchMetrics() {
     const branchMap = byPeriodBranch.get(pk);
     if (!branchMap) return;
 
-    let periodTotalCust = 0, periodTotalOrders = 0, periodTotalNet = 0;
+    let periodTotalCust = 0, periodTotalOrders = 0, periodTotalNet = 0, periodTotalGross = 0;
     const rowsHtml = spaBranches.map(b => {
-      const p = branchMap.get(b.id) || { customers: 0, orders: 0, net: 0 };
+      const p = branchMap.get(b.id) || { customers: 0, orders: 0, net: 0, gross: 0 };
       // Skip branch row if it has no data in this period
-      if (!p.customers && !p.orders && !p.net) return '';
+      if (!p.customers && !p.orders && !p.net && !p.gross) return '';
       periodTotalCust   += p.customers;
       periodTotalOrders += p.orders;
       periodTotalNet    += p.net;
+      periodTotalGross  += p.gross;
       const aov  = p.orders    ? Math.round(p.net / p.orders)    : 0;
       const arpu = p.customers ? Math.round(p.net / p.customers) : 0;
       const shortName = b.name.replace("3AM D'SPA · ", "");
@@ -2395,6 +2397,7 @@ function renderBranchMetrics() {
           <td style="text-align:right;">${fmtNum(p.customers)}</td>
           <td style="text-align:right;">${fmtNum(p.orders)}</td>
           <td style="text-align:right;font-weight:600;">${fmtNum(p.net)}</td>
+          <td style="text-align:right;color:var(--text-muted);">${fmtNum(p.gross)}</td>
           <td style="text-align:right;color:var(--text-muted);">${fmtNum(aov)}</td>
           <td style="text-align:right;color:var(--text-muted);">${fmtNum(arpu)}</td>
         </tr>`;
@@ -2417,7 +2420,8 @@ function renderBranchMetrics() {
                 <th>Cơ sở</th>
                 <th style="text-align:right;">Khách hàng</th>
                 <th style="text-align:right;">Số đơn</th>
-                <th style="text-align:right;">Doanh thu thuần (đ)</th>
+                <th style="text-align:right;">DT thuần (đ)</th>
+                <th style="text-align:right;">DT gộp (đ)</th>
                 <th style="text-align:right;">AOV (đ)</th>
                 <th style="text-align:right;">ARPU (đ)</th>
               </tr>
@@ -2429,6 +2433,7 @@ function renderBranchMetrics() {
                 <td style="text-align:right;">${fmtNum(periodTotalCust)}</td>
                 <td style="text-align:right;">${fmtNum(periodTotalOrders)}</td>
                 <td style="text-align:right;">${fmtNum(periodTotalNet)}</td>
+                <td style="text-align:right;color:var(--text-muted);">${fmtNum(periodTotalGross)}</td>
                 <td style="text-align:right;color:var(--text-muted);">${fmtNum(totalAov)}</td>
                 <td style="text-align:right;color:var(--text-muted);">${fmtNum(totalArpu)}</td>
               </tr>
