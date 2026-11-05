@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.11.05.5" />
+<meta name="version" content="v2026.11.05.6" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-11-05 CRITICAL-shard-sales -->
+<!-- BUILD: 2026-11-05 shard-ktv-quarter -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -2712,9 +2712,17 @@ const FIRESTORE_DOC = 'dashboard/main';
 // Each doc holds compressed {emps[], svcs[], rows[[empIdx, date, time, cust, phone, svcIdx]]}.
 // At ~163 bytes/session raw or ~57 bytes compressed, 1 year × 1 busy branch (~20k sessions)
 // = ~1.1MB compressed, comfortable under 1 MB limit per (branch, year) doc.
-const FIRESTORE_KTV_DOC = (branchId, year) => `dashboard/ktv_${branchId}_${year}`;
+const FIRESTORE_KTV_DOC = (branchId, year) => `dashboard/ktv_${branchId}_${year}`;              // legacy year-sharded (deprecated)
+const FIRESTORE_KTV_QUARTER_DOC = (branchId, year, q) => `dashboard/ktv_${branchId}_${year}_Q${q}`;  // quarter-sharded (current)
 // Legacy doc name (before year-sharding) — kept for backward compat during migration.
 const FIRESTORE_KTV_LEGACY_DOC = (branchId) => `dashboard/ktv_${branchId}`;
+
+// Helper: lấy quarter (1-4) từ date 'YYYY-MM-DD'
+function entryQuarter(date) {
+  const m = parseInt(String(date || '').substring(5, 7), 10);
+  if (!m || m < 1 || m > 12) return null;
+  return Math.ceil(m / 3);  // 1-3→Q1, 4-6→Q2, 7-9→Q3, 10-12→Q4
+}
 
 // ===== KTV session compression =====
 // Why: raw JSON of 9000 sessions = 1.4 MB > Firestore 1 MB limit. Compressed
@@ -2777,19 +2785,30 @@ function decompressKtvSessions(compressed, branchId) {
   return [];
 }
 
-// Parse a KTV doc ID into {branchId, year}. Supports both new format
-// (ktv_tx-soan_2026) and legacy format (ktv_tx-soan).
+// Parse a KTV doc ID into {branchId, year, quarter}. Supports 3 formats:
+//   ktv_tx-soan_2026_Q1  → quarter-sharded (current)
+//   ktv_tx-soan_2026     → year-sharded (deprecated, will migrate)
+//   ktv_tx-soan          → legacy (deprecated)
 function parseKtvDocId(docId) {
   if (!docId.startsWith('ktv_')) return null;
-  const rest = docId.substring(4);  // 'tx-soan_2026' or 'tx-soan'
+  const rest = docId.substring(4);
   const parts = rest.split('_');
-  const lastPart = parts[parts.length - 1];
-  if (/^\d{4}$/.test(lastPart)) {
-    // New format: branch may have underscores too (none currently, but defensive)
-    return { branchId: parts.slice(0, -1).join('_'), year: lastPart };
+  const last = parts[parts.length - 1];
+  const second_last = parts[parts.length - 2];
+  // Quarter format: ktv_<bid>_<YYYY>_Q<n>
+  if (/^Q[1-4]$/.test(last) && /^\d{4}$/.test(second_last || '')) {
+    return {
+      branchId: parts.slice(0, -2).join('_'),
+      year: second_last,
+      quarter: parseInt(last.substring(1), 10)
+    };
   }
-  // Legacy format
-  return { branchId: rest, year: null };
+  // Year format: ktv_<bid>_<YYYY>
+  if (/^\d{4}$/.test(last)) {
+    return { branchId: parts.slice(0, -1).join('_'), year: last, quarter: null };
+  }
+  // Legacy format: ktv_<bid>
+  return { branchId: rest, year: null, quarter: null };
 }
 
 // Parse a SALES doc ID into {branchId, year}. Format: sales_<branchId>_<YYYY>
@@ -2820,7 +2839,13 @@ async function loadFromFirestore() {
     console.log(`[Firestore load] Found ${colSnap.size} docs in dashboard collection`);
 
     let mainPayload = null;
-    const ktvByBranch = {};        // branchId → { fromNewDocs: [], fromLegacy: [] }
+    // KTV docs chia theo 3 tier: quarter (ưu tiên) > year > legacy
+    // Structure: ktvByBranch[branchId] = {
+    //   quarters: {[yearKey]: {[q]: sessions[]}},  // quarter shards
+    //   years:    {[year]: sessions[]},             // year shards (migrate on next save)
+    //   legacy:   sessions[]                        // legacy single doc (migrate)
+    // }
+    const ktvByBranch = {};
     const salesFromShards = [];    // tất cả sales entries từ sales_* docs
     const docInventory = [];
 
@@ -2837,15 +2862,21 @@ async function loadFromFirestore() {
         salesFromShards.push(...entries);
         return;
       }
-      // KTV SHARDS: ktv_<branchId>_<year> hoặc ktv_<branchId>
+      // KTV SHARDS: 3 formats — quarter > year > legacy
       const parsed = parseKtvDocId(doc.id);
       if (!parsed) return;
       const decompressed = decompressKtvSessions(doc.data(), parsed.branchId);
-      if (!ktvByBranch[parsed.branchId]) ktvByBranch[parsed.branchId] = { fromNewDocs: [], fromLegacy: [] };
-      if (parsed.year) {
-        ktvByBranch[parsed.branchId].fromNewDocs.push(...decompressed);
+      if (!ktvByBranch[parsed.branchId]) {
+        ktvByBranch[parsed.branchId] = { quarters: {}, years: {}, legacy: [] };
+      }
+      const slot = ktvByBranch[parsed.branchId];
+      if (parsed.quarter) {
+        if (!slot.quarters[parsed.year]) slot.quarters[parsed.year] = {};
+        slot.quarters[parsed.year][parsed.quarter] = decompressed;
+      } else if (parsed.year) {
+        slot.years[parsed.year] = decompressed;
       } else {
-        ktvByBranch[parsed.branchId].fromLegacy.push(...decompressed);
+        slot.legacy.push(...decompressed);
       }
     });
     console.log(`[Firestore load] Docs: ${docInventory.join(', ')}`);
@@ -2863,15 +2894,38 @@ async function loadFromFirestore() {
       console.log(`[Firestore load] Loaded ${mainPayload.entries.length} sales entries from LEGACY main doc (will migrate on next save)`);
     }
 
-    // For each branch: prefer new per-year docs over legacy doc.
+    // For each branch: prefer quarter shards > year shards > legacy.
+    // Per-year basis: nếu year đó có quarter docs → dùng quarters, bỏ qua year doc.
+    //                 Nếu không có quarter nhưng có year → dùng year (sẽ migrate).
+    //                 Nếu cả 2 không có → dùng legacy (sẽ migrate).
     const allKtvSessions = [];
-    Object.entries(ktvByBranch).forEach(([branchId, { fromNewDocs, fromLegacy }]) => {
-      if (fromNewDocs.length > 0) {
-        console.log(`[Firestore load] ${branchId}: ${fromNewDocs.length} sessions from new (per-year) docs`);
-        allKtvSessions.push(...fromNewDocs);
-      } else if (fromLegacy.length > 0) {
-        console.log(`[Firestore load] ${branchId}: ${fromLegacy.length} sessions from LEGACY doc (will migrate on next save)`);
-        allKtvSessions.push(...fromLegacy);
+    Object.entries(ktvByBranch).forEach(([branchId, slot]) => {
+      const yearsFromQuarters = Object.keys(slot.quarters);
+      const yearsFromYears = Object.keys(slot.years);
+      const allYears = [...new Set([...yearsFromQuarters, ...yearsFromYears])];
+      let branchTotal = 0;
+      let fromQ = 0, fromY = 0;
+      for (const y of allYears) {
+        if (slot.quarters[y]) {
+          for (const q of Object.keys(slot.quarters[y])) {
+            allKtvSessions.push(...slot.quarters[y][q]);
+            fromQ += slot.quarters[y][q].length;
+          }
+        } else if (slot.years[y]) {
+          allKtvSessions.push(...slot.years[y]);
+          fromY += slot.years[y].length;
+        }
+        branchTotal = fromQ + fromY;
+      }
+      // Legacy only used if no year/quarter docs at all for this branch
+      if (branchTotal === 0 && slot.legacy.length > 0) {
+        console.log(`[Firestore load] ${branchId}: ${slot.legacy.length} sessions from LEGACY (will migrate)`);
+        allKtvSessions.push(...slot.legacy);
+      } else {
+        const parts = [];
+        if (fromQ > 0) parts.push(`${fromQ} từ quarter shards`);
+        if (fromY > 0) parts.push(`${fromY} từ year shards (sẽ migrate)`);
+        if (parts.length) console.log(`[Firestore load] ${branchId}: ${parts.join(', ')}`);
       }
     });
 
@@ -2931,27 +2985,50 @@ let _saveTimer = null;
 // Track which branches have pending KTV changes so we only re-save what changed.
 const _ktvDirtyBranches = new Set();
 
-async function saveKtvBranchYearToFirestore(branchId, year, sessions) {
+// Save sessions của 1 (branch, year, quarter) vào doc ktv_<bid>_<year>_Q<n>.
+async function saveKtvBranchYearQuarterToFirestore(branchId, year, quarter, sessions) {
   if (!_firestoreDb) return false;
   try {
+    const docPath = FIRESTORE_KTV_QUARTER_DOC(branchId, year, quarter);
+    if (!sessions || sessions.length === 0) {
+      await _firestoreDb.doc(docPath).delete();
+      return true;
+    }
     const compressed = compressKtvSessions(sessions);
-    const docPath = FIRESTORE_KTV_DOC(branchId, year);
     const jsonSize = JSON.stringify(compressed).length;
     console.log(`[KTV save] ${docPath}: ${sessions.length} sessions, ${(jsonSize/1024).toFixed(1)} KB compressed`);
     await _firestoreDb.doc(docPath).set({
       ...compressed,
       _updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    console.log(`[KTV save] ✓ ${docPath} saved successfully`);
+    console.log(`[KTV save] ✓ ${docPath} saved`);
     return true;
   } catch (e) {
-    console.error(`[KTV save] ✗ FAILED for ${branchId}_${year}:`, e.code || '', e.message || e);
-    // Show user-visible toast so they know save failed
+    console.error(`[KTV save] ✗ FAILED for ${branchId}_${year}_Q${quarter}:`, e.code || '', e.message || e);
     if (typeof showToast === 'function') {
-      showToast(`Lỗi lưu KTV ${branchId} ${year}: ${e.code || e.message || 'unknown'}`);
+      showToast(`Lỗi lưu KTV ${branchId} ${year} Q${quarter}: ${e.code || e.message || 'unknown'}`);
     }
     return false;
   }
+}
+
+// Backward compat: old call sites gọi saveKtvBranchYearToFirestore — xử lý bằng cách
+// split sessions theo quarter và call saveKtvBranchYearQuarterToFirestore.
+async function saveKtvBranchYearToFirestore(branchId, year, sessions) {
+  const byQ = {};
+  for (const s of sessions) {
+    const q = entryQuarter(s.date);
+    if (!q) continue;
+    if (!byQ[q]) byQ[q] = [];
+    byQ[q].push(s);
+  }
+  const saves = [1, 2, 3, 4].map(q =>
+    saveKtvBranchYearQuarterToFirestore(branchId, year, q, byQ[q] || [])
+  );
+  const results = await Promise.all(saves);
+  // Delete old year doc (migration cleanup)
+  try { await _firestoreDb.doc(FIRESTORE_KTV_DOC(branchId, year)).delete(); } catch(e){}
+  return results.every(r => r !== false);
 }
 
 async function deleteLegacyKtvDoc(branchId) {
