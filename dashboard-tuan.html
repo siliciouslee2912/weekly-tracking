@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.11.05.3" />
+<meta name="version" content="v2026.11.05.4" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-11-05 dich-vong-hau -->
+<!-- BUILD: 2026-11-05 branch-alias-refactor -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -3438,40 +3438,55 @@ function purgeBranchRange(branchId, fromISO, toISO) {
 window.purgeBranchRange = purgeBranchRange;
 
 // Detect branch ID from CƠ SỞ column value
-function detectBranchFromCoSo(s) {
-  if (!s) return null;
-  // Vietnamese normalization: NFD strips most diacritics (à→a, ô→o, ấ→a)
-  // but đ/Đ have no canonical decomposition — must replace explicitly.
-  const lower = s.toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd');  // critical for "Hà Đông", "Đà Nẵng", etc.
-  if (lower.includes('tran xuan soan')) return 'tx-soan';
-  // Branch ID is 'cau-giay'; display name is Cầu Giấy.
-  // Accept both spellings in Excel CƠ SỞ column (file from POS may use either).
-  // POS có thể export tên dạng 'Dịch Vọng Hậu' (hiện tại), 'Cầu Giấy' hoặc 'Quan Hoa' (cũ)
-  if (lower.includes('dich vong hau') || lower.includes('cau giay') || lower.includes('quan hoa')) return 'cau-giay';
-  if (lower.includes('ha dong')) return 'ha-dong';
+// ============================================================================
+// BRANCH NAME ALIASES — centralized mapping từ POS-exported names → branch ID.
+// Thêm alias mới ở đây sẽ tự động áp dụng cho CẢ filename lẫn CƠ SỞ column.
+//
+// Cơ sở 'cau-giay' có 3 tên POS có thể dùng (user spec 2026-11-05):
+//   - "Dịch Vọng Hậu" (tên hiện tại)
+//   - "Cầu Giấy" (tên cũ)
+//   - "Quan Hoa" (tên cũ hơn nữa)
+// Khi thêm cơ sở mới → thêm vào BRANCH_ALIASES với mảng alias.
+// ============================================================================
+const BRANCH_ALIASES = {
+  'tx-soan':  ['tran xuan soan'],
+  'cau-giay': ['dich vong hau', 'cau giay', 'quan hoa'],
+  'ha-dong':  ['ha dong']
+};
+
+// Chuẩn hóa chuỗi để match: lowercase + strip diacritics + đ→d + loại bỏ
+// mọi ký tự không phải chữ/số (_, -, space, . → bỏ hết). Giúp match được
+// 'Tra__n_Xua_n_Soa_n' → 'tranxuansoan' hoặc 'Dịch Vọng Hậu' → 'dichvonghau'.
+function normalizeBranchString(s) {
+  return String(s || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // bỏ dấu
+    .replace(/đ/g, 'd')                                    // đ không decompose → replace tay
+    .replace(/[^a-z0-9]/g, '');                            // bỏ mọi ký tự không phải chữ/số
+}
+
+// Common matcher — dùng cho cả 2 hàm detect bên dưới.
+function matchBranchByAlias(input) {
+  if (!input) return null;
+  const cleaned = normalizeBranchString(input);
+  for (const [branchId, aliases] of Object.entries(BRANCH_ALIASES)) {
+    for (const alias of aliases) {
+      const aliasKey = normalizeBranchString(alias);
+      if (cleaned.includes(aliasKey)) return branchId;
+    }
+  }
   return null;
 }
 
-// Detect branch from FILE NAME (preferred — set per user request).
-// File names from POS often encode Vietnamese as e.g.:
-//   'Tra__n_Xua_n_Soa_n' = "Trần Xuân Soạn"
-//   'Ha__Đo_ng'          = "Hà Đông"
-//   'Cau_Giay'           = "Cầu Giấy"
-// Strategy: lowercase, strip diacritics, đ→d, then REMOVE all separators
-// (_, -, ., space) so we can match concatenated keywords as substring.
+// Detect branch từ cột CƠ SỞ trong data Excel (fallback khi filename không match)
+function detectBranchFromCoSo(s) {
+  return matchBranchByAlias(s);
+}
+
+// Detect branch từ TÊN FILE (ưu tiên — set per user request 2026-06-22)
+// File names từ POS encode VN kiểu 'Di_ch_Vo_ng_Ha_u', 'Tra__n_Xua_n_Soa_n', v.v.
+// Sau normalize sẽ ra 'dichvonghau' hoặc 'tranxuansoan' — match với BRANCH_ALIASES.
 function detectBranchFromFilename(filename) {
-  if (!filename) return null;
-  const cleaned = String(filename).toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
-    .replace(/[_\-\s.]/g, '');
-  if (cleaned.includes('tranxuansoan')) return 'tx-soan';
-  // 'dichvonghau' là tên hiện tại POS export, 'caugiay'/'quanhoa' giữ cho file cũ
-  if (cleaned.includes('dichvonghau') || cleaned.includes('caugiay') || cleaned.includes('quanhoa')) return 'cau-giay';
-  if (cleaned.includes('hadong')) return 'ha-dong';
-  return null;
+  return matchBranchByAlias(filename);
 }
 
 // Parse "HH:MM DD/MM/YYYY" → Date object
