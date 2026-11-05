@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.11.05.1" />
+<meta name="version" content="v2026.11.05.2" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-11-05 dt-gop-use-tong-tien -->
+<!-- BUILD: 2026-11-05 ctkm-no-giam-tang-gia -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -491,9 +491,7 @@
         <div class="metric-toggles" id="revenueModeToggle">
           <div class="metric-toggle on" data-mode="net" title="Doanh thu sau khi trừ tất cả khuyến mãi (= TỔNG ĐÃ THANH TOÁN)">DT thuần</div>
           <div class="metric-toggle" data-mode="gross" title="Doanh thu sau CTKM (= cột TỔNG TIỀN), trước voucher + giảm giá cả đơn">DT gộp</div>
-          <div class="metric-toggle" data-mode="promo_ctkm" title="Giảm giá chương trình KM (cột GIẢM / TĂNG GIÁ)">Giảm CTKM</div>
-          <div class="metric-toggle" data-mode="promo_voucher" title="Giảm giá voucher sinh nhật / hạng khách (= DT gộp − DT thuần − CTKM)">Giảm Hạng khách</div>
-          <div class="metric-toggle" data-mode="promo" title="Tổng giảm trừ = CTKM + Voucher (= DT gộp − DT thuần)">Tổng giảm trừ</div>
+          <div class="metric-toggle" data-mode="promo_ctkm" title="Giảm trừ khuyến mãi = DT gộp − DT thuần (voucher + giảm cả đơn + khấu trừ). Không bao gồm cột GIẢM/TĂNG GIÁ (điều chỉnh giá manager).">Giảm trừ KM</div>
           <div class="metric-toggle weekly-hidden" data-mode="profit" title="Lợi nhuận = Doanh thu − Chi phí (từ P&amp;L)">Lợi nhuận</div>
           <div class="metric-toggle weekly-hidden" data-mode="cost" title="Tổng chi phí từ báo cáo P&amp;L">Chi phí</div>
           <div class="metric-toggle" data-mode="customers" title="Số khách hàng (đếm theo Mã KH unique)">Khách hàng</div>
@@ -3165,6 +3163,34 @@ async function loadDataAndRender() {
     }
   }
 
+  // MIGRATION (2026-11-05): reshuffle entries saved under OLD gross=NGUYÊN GIÁ
+  // schema → NEW gross=TỔNG TIỀN schema.
+  //   OLD: gross=NGUYÊN GIÁ, promo=GIẢM/TĂNG GIÁ (CTKM manager), voucher=gross-net-promo
+  //   NEW: gross=TỔNG TIỀN (=NGUYÊN GIÁ-GIẢM), promo=gross-net (giảm trừ KM), voucher=0
+  // Guarded by flag `_gross_is_tong_tien`. Runs once per entry — safe to re-run.
+  // New uploads (post-v2026.11.05.1) already set the flag, so they skip this.
+  if (Array.isArray(data.entries)) {
+    let migratedEntries = 0;
+    data.entries.forEach(e => {
+      if (e._gross_is_tong_tien) return;
+      if (!e.revenue || !e.promotions) return;
+      // Only touch daily-upload entries (have .date). Legacy weekly SCA seeds skip.
+      if (!e.date) return;
+      const svc      = Number(e.revenue.service) || 0;
+      const promoSvc = Number(e.promotions.service) || 0;
+      const voucherSvc = (e.promoVoucher && Number(e.promoVoucher.service)) || 0;
+      // Reshuffle: new gross = old gross − old CTKM; new CTKM = old voucher
+      e.revenue.service = Math.max(0, svc - promoSvc);
+      e.promotions.service = voucherSvc;
+      if (e.promoVoucher) e.promoVoucher.service = 0;
+      e._gross_is_tong_tien = true;
+      migratedEntries++;
+    });
+    if (migratedEntries > 0) {
+      console.warn(`[Migration 2026-11-05] Đã chuyển ${migratedEntries} entries sang schema gross=TỔNG TIỀN.`);
+    }
+  }
+
   // Defensive dedup on every load — protects against duplicates from
   // mid-upload failures, schema migrations, or browser cache quirks.
   if (Array.isArray(data.entries)) {
@@ -3536,8 +3562,11 @@ function parseExcelSalesFile(arrayBuffer, filename) {
     }
     if (branchId) branchCounts[branchId] = (branchCounts[branchId] || 0) + 1;
     const gross = Number(r[col.gross]) || 0;
-    const promo = col.promo !== undefined ? (Number(r[col.promo]) || 0) : 0;
     const net   = Number(r[col.net])   || 0;
+    // CTKM (Giảm trừ KM) giờ không đọc từ cột GIẢM/TĂNG GIÁ nữa (cột đó là điều
+    // chỉnh giá của manager, không phải khuyến mãi). CTKM được tính ở bước
+    // daily aggregate = max(0, gross − net) — bao gồm voucher + giảm cả đơn + khấu trừ.
+    const promo = 0;
     const custId = String(r[col.custId] || '').trim();
     transactions.push({ dt, branchId, coSo, gross, promo, net, custId });
   }
@@ -3581,11 +3610,11 @@ function parseExcelSalesFile(arrayBuffer, filename) {
     .map(([day, d]) => {
       const gross = Math.round(d.gross);
       const net = Math.round(d.net);
-      const promo = Math.round(d.promo);
-      // Voucher = voucher sinh nhật/hạng khách + giảm giá cả đơn + khấu trừ.
-      // gross = TỔNG TIỀN (đã trừ CTKM manager), nên voucher = gross - net.
-      // (CTKM nằm riêng trong metric `promo`, không trừ lại ở đây để tránh trùng.)
-      const voucher = Math.max(0, gross - net);
+      // CTKM (Giảm trừ KM) = DT gộp − DT thuần (voucher sản phẩm + giảm cả đơn + khấu trừ).
+      // Cột GIẢM/TĂNG GIÁ (manager adjustment) KHÔNG tính là CTKM — đã trừ trước khi
+      // vào TỔNG TIỀN. Voucher riêng không còn ý nghĩa dưới schema mới (= 0).
+      const promo = Math.max(0, gross - net);
+      const voucher = 0;
       return {
         date: day,
         txCount: d.txCount,
@@ -4004,8 +4033,7 @@ function showUploadPreview(filename, r) {
       <div class="upload-meta-item"><div class="label">Tổng giao dịch</div><div class="value">${fmtNum(r.totalTx)}</div></div>
       <div class="upload-meta-item"><div class="label">Số ngày có data</div><div class="value">${r.days.length}</div></div>
       <div class="upload-meta-item"><div class="label">DT gộp (TỔNG TIỀN)</div><div class="value">${fmtVND(totalGross)}</div></div>
-      <div class="upload-meta-item"><div class="label">Giảm KM CTKM</div><div class="value">${fmtVND(totalPromo)}</div></div>
-      <div class="upload-meta-item"><div class="label">Giảm KM voucher</div><div class="value">${fmtVND(totalVoucher)}</div></div>
+      <div class="upload-meta-item"><div class="label">Giảm trừ KM</div><div class="value">${fmtVND(totalPromo)}</div></div>
       <div class="upload-meta-item"><div class="label">DT thuần (TỔNG ĐÃ TT)</div><div class="value">${fmtVND(totalNet)}</div></div>
     </div>
 
@@ -4013,7 +4041,7 @@ function showUploadPreview(filename, r) {
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px;">
       <table class="upload-week-table">
         <thead><tr>
-          <th>Tháng</th><th>Đơn</th><th>KH</th><th>DT gộp</th><th>KM CTKM</th><th>KM voucher</th><th>DT thuần</th>
+          <th>Tháng</th><th>Đơn</th><th>KH</th><th>DT gộp</th><th>Giảm trừ KM</th><th>DT thuần</th>
         </tr></thead>
         <tbody>${r.months.map(m => `
           <tr>
@@ -4022,7 +4050,6 @@ function showUploadPreview(filename, r) {
             <td>${fmtNum(m.customers)}</td>
             <td>${fmtVND(m.gross)}</td>
             <td>${fmtVND(m.promo)}</td>
-            <td>${fmtVND(m.voucher)}</td>
             <td><strong>${fmtVND(m.net)}</strong></td>
           </tr>`).join('')}
         </tbody>
@@ -4034,7 +4061,7 @@ function showUploadPreview(filename, r) {
       <div style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:6px;">
         <table class="upload-week-table">
           <thead><tr>
-            <th>Tuần bắt đầu</th><th>Tx</th><th>KH</th><th>Mới</th><th>Cũ</th><th>DT gộp</th><th>KM CTKM</th><th>KM voucher</th><th>DT thuần</th>
+            <th>Tuần bắt đầu</th><th>Tx</th><th>KH</th><th>Mới</th><th>Cũ</th><th>DT gộp</th><th>Giảm trừ KM</th><th>DT thuần</th>
           </tr></thead>
           <tbody>${r.weeks.map(w => `
             <tr class="${w.partial ? 'partial-week' : ''}">
@@ -4045,7 +4072,6 @@ function showUploadPreview(filename, r) {
               <td style="color:#7c8aa3;">${fmtNum(w.returning)}</td>
               <td>${fmtVND(w.gross)}</td>
               <td>${fmtVND(w.promo)}</td>
-              <td>${fmtVND(w.voucher)}</td>
               <td>${fmtVND(w.net)}</td>
             </tr>`).join('')}</tbody>
         </table>
@@ -4055,9 +4081,8 @@ function showUploadPreview(filename, r) {
     <div style="font-size:12px;color:var(--text-muted);margin-top:10px;line-height:1.6;">
       <strong>📊 Lưu trữ theo NGÀY:</strong> mỗi ngày = 1 record → khi xem theo tháng sẽ tổng hợp theo
       <strong>calendar tháng</strong> (không bị lệch tuần biên). Khi xem theo tuần sẽ tổng hợp Mon-Sun.<br>
-      <strong>📊 3 loại giảm trừ:</strong> <strong>KM CTKM</strong> (cột "GIẢM / TĂNG GIÁ" file) ·
-      <strong>KM voucher</strong> (= DT gộp − DT thuần − KM CTKM = voucher sinh nhật / hạng khách) ·
-      <strong>Tổng giảm trừ</strong> = CTKM + voucher.<br>
+      <strong>📊 Giảm trừ KM</strong> = DT gộp − DT thuần (voucher sản phẩm + giảm giá cả đơn + khấu trừ).
+      Cột "GIẢM / TĂNG GIÁ" là điều chỉnh của manager, KHÔNG tính vào giảm trừ KM.<br>
       <strong>💾 Khi bấm "Lưu":</strong> các entries cũ trong khoảng ${r.fileStart} → ${r.fileEnd} sẽ bị thay thế.
     </div>
     <div class="upload-actions">
@@ -4093,9 +4118,10 @@ function confirmUpload() {
     returning: d.returning,
     orders: d.txCount,
     sources: {},
-    revenue: { service: d.gross, product: 0 },
-    promotions: { service: d.promo, product: 0 },        // CTKM
-    promoVoucher: { service: d.voucher, product: 0 }     // Voucher SN/hạng KH
+    revenue: { service: d.gross, product: 0 },           // gross = TỔNG TIỀN (v2026.11.05+)
+    promotions: { service: d.promo, product: 0 },        // Giảm trừ KM = gross − net
+    promoVoucher: { service: d.voucher, product: 0 },    // (deprecated, luôn = 0 trong schema mới)
+    _gross_is_tong_tien: true                             // flag: entry đã lưu theo schema mới
   }));
 
   // ============================================================================
