@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.10.07.2" />
+<meta name="version" content="v2026.11.05.1" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-10-07 reset-metric-on-f5 -->
+<!-- BUILD: 2026-11-05 dt-gop-use-tong-tien -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -490,7 +490,7 @@
         <span class="branch-bar-label">Hiển thị thông tin:</span>
         <div class="metric-toggles" id="revenueModeToggle">
           <div class="metric-toggle on" data-mode="net" title="Doanh thu sau khi trừ tất cả khuyến mãi (= TỔNG ĐÃ THANH TOÁN)">DT thuần</div>
-          <div class="metric-toggle" data-mode="gross" title="Doanh thu chưa trừ khuyến mãi (= NGUYÊN GIÁ)">DT gộp</div>
+          <div class="metric-toggle" data-mode="gross" title="Doanh thu sau CTKM (= cột TỔNG TIỀN), trước voucher + giảm giá cả đơn">DT gộp</div>
           <div class="metric-toggle" data-mode="promo_ctkm" title="Giảm giá chương trình KM (cột GIẢM / TĂNG GIÁ)">Giảm CTKM</div>
           <div class="metric-toggle" data-mode="promo_voucher" title="Giảm giá voucher sinh nhật / hạng khách (= DT gộp − DT thuần − CTKM)">Giảm Hạng khách</div>
           <div class="metric-toggle" data-mode="promo" title="Tổng giảm trừ = CTKM + Voucher (= DT gộp − DT thuần)">Tổng giảm trừ</div>
@@ -3464,13 +3464,14 @@ function findHeaderRow(rows) {
 }
 
 // Map header labels to column indices (handles slight variations)
-// COLUMN SEMANTICS (per user spec):
-//   DT GỘP   = NGUYÊN GIÁ (original price before any discount)
-//   GIẢM KM  = GIẢM / TĂNG GIÁ (manager-applied price adjustment)
+// COLUMN SEMANTICS (updated 2026-11-05 per user spec):
+//   DT GỘP   = TỔNG TIỀN (= NGUYÊN GIÁ − GIẢM/TĂNG GIÁ, after manager price
+//              adjustment but before voucher + giảm giá cả đơn + khấu trừ).
+//              Fallback → NGUYÊN GIÁ if column TỔNG TIỀN is missing (older files).
+//   GIẢM KM  = GIẢM / TĂNG GIÁ (manager-applied discount — đã trừ trước khi vào DT gộp,
+//              giữ dưới dạng metric độc lập để báo cáo).
 //   DT THUẦN = TỔNG ĐÃ THANH TOÁN (actual amount paid by customer)
-// Column "TỔNG TIỀN" is intentionally NOT read — it sits between NGUYÊN GIÁ
-// and TỔNG ĐÃ THANH TOÁN (after manager discount, before voucher), and including
-// it would cause confusion.
+//   VOUCHER  = DT gộp − DT thuần (voucher sinh nhật/hạng khách + giảm giá cả đơn + khấu trừ)
 function buildColMap(headerRow) {
   const map = {};
   headerRow.forEach((h, i) => {
@@ -3479,10 +3480,15 @@ function buildColMap(headerRow) {
     if (norm === 'NGÀY') map.date = i;
     if (norm === 'MÃ KHÁCH HÀNG') map.custId = i;
     if (norm === 'KHÁCH HÀNG') map.custName = i;
-    if (norm === 'NGUYÊN GIÁ') map.gross = i;
+    if (norm === 'NGUYÊN GIÁ') map.nguyenGia = i;  // fallback for DT gộp
+    if (norm === 'TỔNG TIỀN') map.gross = i;       // primary DT gộp column
     if (norm === 'GIẢM / TĂNG GIÁ' || norm === 'GIẢM/TĂNG GIÁ' || norm === 'GIẢM TĂNG GIÁ') map.promo = i;
     if (norm === 'TỔNG ĐÃ THANH TOÁN') map.net = i;
   });
+  // If TỔNG TIỀN missing, fall back to NGUYÊN GIÁ
+  if (map.gross === undefined && map.nguyenGia !== undefined) {
+    map.gross = map.nguyenGia;
+  }
   return map;
 }
 
@@ -3507,7 +3513,7 @@ function parseExcelSalesFile(arrayBuffer, filename) {
 
   const col = buildColMap(rows[hdrIdx]);
   if (col.date === undefined || col.net === undefined || col.gross === undefined) {
-    throw new Error('Thiếu cột bắt buộc. File cần có: NGÀY, NGUYÊN GIÁ, TỔNG ĐÃ THANH TOÁN.');
+    throw new Error('Thiếu cột bắt buộc. File cần có: NGÀY, TỔNG TIỀN (hoặc NGUYÊN GIÁ), TỔNG ĐÃ THANH TOÁN.');
   }
 
   // Branch detection: prefer filename. Compute once outside row loop since
@@ -3576,7 +3582,10 @@ function parseExcelSalesFile(arrayBuffer, filename) {
       const gross = Math.round(d.gross);
       const net = Math.round(d.net);
       const promo = Math.round(d.promo);
-      const voucher = Math.max(0, gross - net - promo);
+      // Voucher = voucher sinh nhật/hạng khách + giảm giá cả đơn + khấu trừ.
+      // gross = TỔNG TIỀN (đã trừ CTKM manager), nên voucher = gross - net.
+      // (CTKM nằm riêng trong metric `promo`, không trừ lại ở đây để tránh trùng.)
+      const voucher = Math.max(0, gross - net);
       return {
         date: day,
         txCount: d.txCount,
@@ -3994,7 +4003,7 @@ function showUploadPreview(filename, r) {
       <div class="upload-meta-item"><div class="label">Khoảng thời gian</div><div class="value" style="font-size:14px;">${r.fileStart} → ${r.fileEnd}</div></div>
       <div class="upload-meta-item"><div class="label">Tổng giao dịch</div><div class="value">${fmtNum(r.totalTx)}</div></div>
       <div class="upload-meta-item"><div class="label">Số ngày có data</div><div class="value">${r.days.length}</div></div>
-      <div class="upload-meta-item"><div class="label">DT gộp (NGUYÊN GIÁ)</div><div class="value">${fmtVND(totalGross)}</div></div>
+      <div class="upload-meta-item"><div class="label">DT gộp (TỔNG TIỀN)</div><div class="value">${fmtVND(totalGross)}</div></div>
       <div class="upload-meta-item"><div class="label">Giảm KM CTKM</div><div class="value">${fmtVND(totalPromo)}</div></div>
       <div class="upload-meta-item"><div class="label">Giảm KM voucher</div><div class="value">${fmtVND(totalVoucher)}</div></div>
       <div class="upload-meta-item"><div class="label">DT thuần (TỔNG ĐÃ TT)</div><div class="value">${fmtVND(totalNet)}</div></div>
