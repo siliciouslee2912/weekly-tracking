@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.11.05.2" />
+<meta name="version" content="v2026.11.05.3" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-11-05 ctkm-no-giam-tang-gia -->
+<!-- BUILD: 2026-11-05 dich-vong-hau -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -3448,7 +3448,8 @@ function detectBranchFromCoSo(s) {
   if (lower.includes('tran xuan soan')) return 'tx-soan';
   // Branch ID is 'cau-giay'; display name is Cầu Giấy.
   // Accept both spellings in Excel CƠ SỞ column (file from POS may use either).
-  if (lower.includes('quan hoa') || lower.includes('cau giay')) return 'cau-giay';
+  // POS có thể export tên dạng 'Dịch Vọng Hậu' (hiện tại), 'Cầu Giấy' hoặc 'Quan Hoa' (cũ)
+  if (lower.includes('dich vong hau') || lower.includes('cau giay') || lower.includes('quan hoa')) return 'cau-giay';
   if (lower.includes('ha dong')) return 'ha-dong';
   return null;
 }
@@ -3467,7 +3468,8 @@ function detectBranchFromFilename(filename) {
     .replace(/đ/g, 'd')
     .replace(/[_\-\s.]/g, '');
   if (cleaned.includes('tranxuansoan')) return 'tx-soan';
-  if (cleaned.includes('caugiay') || cleaned.includes('quanhoa')) return 'cau-giay';
+  // 'dichvonghau' là tên hiện tại POS export, 'caugiay'/'quanhoa' giữ cho file cũ
+  if (cleaned.includes('dichvonghau') || cleaned.includes('caugiay') || cleaned.includes('quanhoa')) return 'cau-giay';
   if (cleaned.includes('hadong')) return 'ha-dong';
   return null;
 }
