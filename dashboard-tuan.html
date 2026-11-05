@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.11.05.4" />
+<meta name="version" content="v2026.11.05.5" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-11-05 branch-alias-refactor -->
+<!-- BUILD: 2026-11-05 CRITICAL-shard-sales -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -2792,6 +2792,25 @@ function parseKtvDocId(docId) {
   return { branchId: rest, year: null };
 }
 
+// Parse a SALES doc ID into {branchId, year}. Format: sales_<branchId>_<YYYY>
+// (ex: 'sales_tx-soan_2026', 'sales_cau-giay_2025').
+function parseSalesDocId(docId) {
+  if (!docId.startsWith('sales_')) return null;
+  const rest = docId.substring(6);
+  const parts = rest.split('_');
+  const lastPart = parts[parts.length - 1];
+  if (/^\d{4}$/.test(lastPart)) {
+    return { branchId: parts.slice(0, -1).join('_'), year: lastPart };
+  }
+  return null;
+}
+
+// Helper: lấy year từ entry (prefer .date, fallback .weekStart)
+function entryYear(e) {
+  const d = e.date || e.weekStart || '';
+  return /^\d{4}/.test(d) ? d.substring(0, 4) : null;
+}
+
 async function loadFromFirestore() {
   if (!_firestoreDb) return null;
   try {
@@ -2801,7 +2820,8 @@ async function loadFromFirestore() {
     console.log(`[Firestore load] Found ${colSnap.size} docs in dashboard collection`);
 
     let mainPayload = null;
-    const ktvByBranch = {};  // branchId → { fromNewDocs: [], fromLegacy: [] }
+    const ktvByBranch = {};        // branchId → { fromNewDocs: [], fromLegacy: [] }
+    const salesFromShards = [];    // tất cả sales entries từ sales_* docs
     const docInventory = [];
 
     colSnap.forEach(doc => {
@@ -2810,6 +2830,14 @@ async function loadFromFirestore() {
         mainPayload = doc.data().payload || {};
         return;
       }
+      // SALES SHARDS: sales_<branchId>_<year>
+      const salesParsed = parseSalesDocId(doc.id);
+      if (salesParsed) {
+        const entries = doc.data().entries || [];
+        salesFromShards.push(...entries);
+        return;
+      }
+      // KTV SHARDS: ktv_<branchId>_<year> hoặc ktv_<branchId>
       const parsed = parseKtvDocId(doc.id);
       if (!parsed) return;
       const decompressed = decompressKtvSessions(doc.data(), parsed.branchId);
@@ -2825,6 +2853,14 @@ async function loadFromFirestore() {
     if (!mainPayload) {
       updateSyncIndicator('online', 'Chưa có dữ liệu');
       return null;
+    }
+
+    // SALES: ưu tiên shards nếu có, else giữ mainPayload.entries (pre-shard legacy)
+    if (salesFromShards.length > 0) {
+      mainPayload.entries = salesFromShards;
+      console.log(`[Firestore load] Loaded ${salesFromShards.length} sales entries from shards`);
+    } else if (Array.isArray(mainPayload.entries) && mainPayload.entries.length > 0) {
+      console.log(`[Firestore load] Loaded ${mainPayload.entries.length} sales entries from LEGACY main doc (will migrate on next save)`);
     }
 
     // For each branch: prefer new per-year docs over legacy doc.
@@ -2970,6 +3006,55 @@ async function saveAllDirtyKtvBranches(data) {
   }
 }
 
+// Save sales entries của 1 branch + 1 year vào doc 'sales_<branchId>_<year>'.
+// entries = array of entry objects. Nếu empty → doc sẽ bị xoá.
+async function saveSalesBranchYearToFirestore(branchId, year, entries) {
+  if (!_firestoreDb) return false;
+  const docPath = `dashboard/sales_${branchId}_${year}`;
+  try {
+    if (!entries || entries.length === 0) {
+      await _firestoreDb.doc(docPath).delete();
+      return true;
+    }
+    await _firestoreDb.doc(docPath).set({
+      entries,
+      _updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    return true;
+  } catch (e) {
+    console.error(`[Sales save] ${docPath} FAILED:`, e.code || '', e.message || e);
+    return false;
+  }
+}
+
+// Group tất cả sales entries theo (branchId, year) và save song song.
+// Trả về true nếu tất cả shards save thành công, false nếu có 1 shard fail.
+async function saveAllSalesShards(data) {
+  if (!Array.isArray(data.entries)) return true;
+  const byKey = {};  // 'branchId|year' → entries[]
+  for (const e of data.entries) {
+    const bid = e.branchId;
+    const year = entryYear(e);
+    if (!bid || !year) continue;
+    const key = bid + '|' + year;
+    if (!byKey[key]) byKey[key] = [];
+    byKey[key].push(e);
+  }
+  const saves = [];
+  for (const key of Object.keys(byKey)) {
+    const [branchId, year] = key.split('|');
+    saves.push(saveSalesBranchYearToFirestore(branchId, year, byKey[key]));
+  }
+  const results = await Promise.all(saves);
+  const failed = results.filter(r => r === false).length;
+  if (failed > 0) {
+    console.error(`[Sales save] ${failed}/${saves.length} shards FAILED`);
+    return false;
+  }
+  console.log(`[Sales save] ✓ All ${saves.length} shards succeeded (${data.entries.length} entries)`);
+  return true;
+}
+
 async function saveToFirestore(data) {
   if (!_firestoreDb) return false;
   // Debounce save
@@ -2978,9 +3063,16 @@ async function saveToFirestore(data) {
     _saveTimer = setTimeout(async () => {
       try {
         updateSyncIndicator('syncing', 'Đang lưu…');
-        // Strip ktvSessions before saving to main doc (avoid 1 MB limit on main)
+        // Save sales shards FIRST (critical path — if this fails, we keep entries in main as safety net)
+        const salesOk = await saveAllSalesShards(data);
+        // Strip entries + ktvSessions from main doc (both are sharded now)
         const mainPayload = { ...data };
         delete mainPayload.ktvSessions;
+        if (salesOk) {
+          delete mainPayload.entries;  // ONLY strip if shards saved successfully
+        } else {
+          console.warn('[Firestore save] Sales shards failed → keeping entries in main doc as safety net.');
+        }
         await _firestoreDb.doc(FIRESTORE_DOC).set({
           payload: mainPayload,
           _updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -3960,9 +4052,13 @@ async function confirmKtvUpload() {
     try {
       // Cancel any pending debounced save (we'll do it now synchronously)
       clearTimeout(_saveTimer);
-      // 1. Save main payload (without ktvSessions)
+      // 1a. Save sales shards (sales entries không thay đổi khi upload KTV, nhưng
+      //     vẫn save để stripping main an toàn).
+      const salesOk = await saveAllSalesShards(DATA);
+      // 1b. Save main payload (without ktvSessions, without entries if sharded)
       const mainPayload = { ...DATA };
       delete mainPayload.ktvSessions;
+      if (salesOk) delete mainPayload.entries;
       await _firestoreDb.doc(FIRESTORE_DOC).set({
         payload: mainPayload,
         _updatedAt: firebase.firestore.FieldValue.serverTimestamp()
