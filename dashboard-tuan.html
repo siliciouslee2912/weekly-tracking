@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.11.16.1" />
+<meta name="version" content="v2026.11.16.2" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-11-16 fix-date-dash-format -->
+<!-- BUILD: 2026-11-16 ktv-branch-dropdown -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -3946,12 +3946,17 @@ function parseExcelKtvFile(arrayBuffer, filename) {
   }
   if (sessions.length === 0) throw new Error('Không tìm thấy ca dịch vụ hợp lệ trong file. (Kiểm tra: cột NGÀY LÀM đúng định dạng "HH:MM DD/MM/YYYY" hoặc "HH:MM DD-MM-YYYY")');
 
-  // Pick dominant branch
+  // Pick dominant branch — nếu detect được từ filename/CƠ SỞ.
+  // Nếu không detect được, KHÔNG throw — để user chọn trong dropdown UI (fallback).
   const branchId = Object.entries(branchCounts).sort((a,b) => b[1] - a[1])[0]?.[0] || null;
-  if (!branchId) throw new Error('Không xác định được cơ sở. Tên file cần chứa một trong: "Trần Xuân Soạn", "Dịch Vọng Hậu"/"Cầu Giấy"/"Quan Hoa", hoặc "Hà Đông". Vui lòng đổi tên file rồi upload lại.');
+  const branchAutoDetected = branchId !== null;
+  // Nếu không detect được branch → gán branchId = null cho tất cả sessions,
+  // confirmKtvUpload() sẽ gán branchId từ dropdown khi user bấm "Lưu".
 
-  // Filter to dominant branch only
-  const cleanSessions = sessions.filter(s => s.branchId === branchId);
+  // Filter to detected branch nếu có, else giữ tất cả sessions (user sẽ gán branch trong UI)
+  const cleanSessions = branchAutoDetected
+    ? sessions.filter(s => s.branchId === branchId)
+    : sessions;  // branchId của từng session vẫn null, sẽ set sau khi user chọn
 
   // Date range
   cleanSessions.sort((a,b) => a.date.localeCompare(b.date));
@@ -3965,7 +3970,8 @@ function parseExcelKtvFile(arrayBuffer, filename) {
 
   return {
     fileType: 'ktv',
-    branchId,
+    branchId,            // null nếu không auto-detect được
+    branchAutoDetected,  // true/false — UI dùng để hiển thị dropdown cho user chọn khi false
     fileStart,
     fileEnd,
     sessions: cleanSessions,
@@ -4036,8 +4042,20 @@ function showUploadError(filename, msg) {
 }
 
 function showKtvUploadPreview(filename, r) {
-  const branch = getBranch(r.branchId);
-  const branchName = branch ? branch.name.replace("3AM D'SPA · ", "") : r.branchId;
+  // Luôn hiển thị dropdown cơ sở — pre-select nếu auto detect OK, hoặc để user tự chọn.
+  const branchOpts = ['tx-soan', 'cau-giay', 'ha-dong'].map(bid => {
+    const b = BRANCHES.find(x => x.id === bid);
+    const name = b ? b.name.replace("3AM D'SPA · ", "") : bid;
+    const sel = (bid === r.branchId) ? 'selected' : '';
+    return `<option value="${bid}" ${sel}>${name}</option>`;
+  }).join('');
+  // Nếu không auto-detect được, thêm placeholder "-- Chọn cơ sở --" ở đầu + required
+  const noAutoDetectOpt = r.branchAutoDetected
+    ? ''
+    : `<option value="" selected disabled>-- Chọn cơ sở --</option>`;
+  const detectBadge = r.branchAutoDetected
+    ? `<span style="display:inline-block;background:#10b98122;color:#10b981;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;margin-left:6px;">✓ Tự nhận diện</span>`
+    : `<span style="display:inline-block;background:#f59e0b22;color:#f59e0b;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;margin-left:6px;">⚠ Chọn thủ công</span>`;
 
   // Top 5 KTV preview
   const byEmp = {};
@@ -4047,7 +4065,10 @@ function showKtvUploadPreview(filename, r) {
   uploadBody.innerHTML = `
     <p style="color:var(--text-muted);font-size:13px;">${filename} <span style="margin-left:6px;background:var(--accent-2)22;color:var(--accent-2);padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;">📋 File KTV</span></p>
     <div class="upload-meta">
-      <div class="upload-meta-item"><div class="label">Cơ sở</div><div class="value" style="font-size:14px;">${branchName}</div></div>
+      <div class="upload-meta-item" style="grid-column: span 2;">
+        <div class="label">Cơ sở ${detectBadge}</div>
+        <select id="ktvUploadBranchSelect" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:var(--surface);color:var(--text);margin-top:4px;">${noAutoDetectOpt}${branchOpts}</select>
+      </div>
       <div class="upload-meta-item"><div class="label">Khoảng thời gian</div><div class="value" style="font-size:14px;">${r.fileStart} → ${r.fileEnd}</div></div>
       <div class="upload-meta-item"><div class="label">Tổng số ca</div><div class="value">${fmtNum(r.totalSessions)}</div></div>
       <div class="upload-meta-item"><div class="label">Số KTV</div><div class="value">${r.uniqueEmployees}</div></div>
@@ -4066,7 +4087,7 @@ function showKtvUploadPreview(filename, r) {
     </div>
 
     <div style="font-size:12px;color:var(--text-muted);line-height:1.6;">
-      <strong>💾 Khi bấm "Lưu":</strong> các ca cũ trong khoảng ${r.fileStart} → ${r.fileEnd} của cơ sở <strong>${branchName}</strong> sẽ bị thay thế.<br>
+      <strong>💾 Khi bấm "Lưu":</strong> các ca cũ trong khoảng ${r.fileStart} → ${r.fileEnd} của cơ sở đã chọn sẽ bị thay thế.<br>
       <strong>📋 Roster:</strong> KTV mới sẽ tự thêm vào danh sách. KTV >4 tuần không có ca sẽ chuyển sang mục "Đã nghỉ".
     </div>
 
@@ -4082,6 +4103,17 @@ function showKtvUploadPreview(filename, r) {
 async function confirmKtvUpload() {
   const r = _currentParse;
   if (!r || r.fileType !== 'ktv') return;
+
+  // Lấy branch từ dropdown user chọn (override auto-detect)
+  const selectEl = document.getElementById('ktvUploadBranchSelect');
+  const chosenBranch = selectEl ? selectEl.value : r.branchId;
+  if (!chosenBranch) {
+    alert('Vui lòng chọn cơ sở trước khi lưu.');
+    return;
+  }
+  // Gán branchId cho mọi session (fix cho trường hợp auto-detect fail → sessions có branchId=null)
+  r.branchId = chosenBranch;
+  r.sessions.forEach(s => { s.branchId = chosenBranch; });
 
   // Ensure storage exists
   if (!Array.isArray(DATA.ktvSessions)) DATA.ktvSessions = [];
