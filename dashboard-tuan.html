@@ -4,11 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RP - Dashboard 3AM &amp; SCA</title>
-<meta name="version" content="v2026.11.05.6" />
+<meta name="version" content="v2026.11.16.1" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<!-- BUILD: 2026-11-05 shard-ktv-quarter -->
+<!-- BUILD: 2026-11-16 fix-date-dash-format -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -3660,7 +3660,10 @@ function detectBranchFromFilename(filename) {
 
 // Parse "HH:MM DD/MM/YYYY" → Date object
 function parseTransactionDate(s) {
-  const m = String(s).trim().match(/^(\d{1,2}):(\d{2})\s+(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  // Chấp nhận cả 2 format POS hay export:
+  //   'HH:MM DD/MM/YYYY'  (vd '19:08 28/06/2026')  — format cũ
+  //   'HH:MM DD-MM-YYYY'  (vd '17:56 15-11-2026')  — format mới
+  const m = String(s).trim().match(/^(\d{1,2}):(\d{2})\s+(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
   if (!m) return null;
   return new Date(+m[5], +m[4] - 1, +m[3], +m[1], +m[2]);
 }
@@ -3941,11 +3944,11 @@ function parseExcelKtvFile(arrayBuffer, filename) {
       });
     });
   }
-  if (sessions.length === 0) throw new Error('Không tìm thấy ca dịch vụ hợp lệ trong file.');
+  if (sessions.length === 0) throw new Error('Không tìm thấy ca dịch vụ hợp lệ trong file. (Kiểm tra: cột NGÀY LÀM đúng định dạng "HH:MM DD/MM/YYYY" hoặc "HH:MM DD-MM-YYYY")');
 
   // Pick dominant branch
   const branchId = Object.entries(branchCounts).sort((a,b) => b[1] - a[1])[0]?.[0] || null;
-  if (!branchId) throw new Error('Không xác định được cơ sở từ cột "CƠ SỞ".');
+  if (!branchId) throw new Error('Không xác định được cơ sở. Tên file cần chứa một trong: "Trần Xuân Soạn", "Dịch Vọng Hậu"/"Cầu Giấy"/"Quan Hoa", hoặc "Hà Đông". Vui lòng đổi tên file rồi upload lại.');
 
   // Filter to dominant branch only
   const cleanSessions = sessions.filter(s => s.branchId === branchId);
